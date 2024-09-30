@@ -1,1 +1,577 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Name - Professional CV</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* General Styles */
+        body {
+            font-family: 'Poppins', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #FDFEFE;
+            color: #2C3E50;
+        }
+
+        /* Navigation Bar */
+        nav {
+            background: #2C3E50;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        nav a {
+            color: #ECF0F1;
+            text-decoration: none;
+            margin: 0 20px;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+
+        nav a:hover {
+            color: #F39C12;
+        }
+
+        /* Section Styling */
+        section {
+            padding: 50px 20px;
+            margin: 20px auto;
+            max-width: 1000px;
+            background: #FFFFFF;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+        }
+
+        section h2 {
+            font-size: 2.2rem;
+            color: #2C3E50;
+            margin-bottom: 20px;
+        }
+
+        /* Intro Section */
+        #home .profile {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+        }
+
+        #home .profile img {
+            width: 200px;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        #home .intro {
+            flex: 1;
+        }
+
+        #home .intro p {
+            font-size: 1rem;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            text-align: justify;
+        }
+
+        /* Skills Section */
+        .skills-section {
+            margin-top: 20px;
+        }
+
+        .skills-category {
+            margin-bottom: 20px;
+        }
+
+        .skills-category h3 {
+            font-size: 1.3rem;
+            color: #2C3E50;
+            font-weight: 400; /* Normal font weight (not bold) */
+            margin-bottom: 10px;
+        }
+
+        .skills-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .skill {
+            background: #2C3E50;
+            color: #ECF0F1;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        /* Contact Form */
+        .contact-form {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .contact-form input, .contact-form textarea {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+            width: 100%;
+        }
+
+        .contact-form button {
+            padding: 15px 20px;
+            border: none;
+            background: #2C3E50;
+            color: #fff;
+            font-size: 1rem;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .contact-form button:hover {
+            background: #F39C12;
+        }
+
+        /* Research Section */
+        .research-intro {
+            text-align: justify; /* Justify the text */
+        }
+
+        .research-intro p, .research-intro ul {
+            margin-bottom: 15px;
+        }
+
+        .research-intro ul {
+            list-style-type: disc;
+            padding-left: 20px;
+        }
+
+        .research-intro ul li {
+            margin-bottom: 10px;
+        }
+
+        .research-intro strong {
+            color: #2C3E50; /* Emphasize the bold text */
+        }
+
+        .research-item {
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #ECF0F1;
+            border-left: 5px solid #B8860B;
+            border-radius: 5px;
+            transition: background 0.3s;
+            text-align: justify; /* Justifies the text alignment */
+            overflow: hidden; /* Prevents overflow */
+            position: relative;
+        }
+
+        .research-item .citation {
+            color: #B8860B;
+            font-weight: 600;
+        }
+
+        .research-item:hover {
+            background: #D5DDE5;
+        }
+
+        .research-item h3 {
+            margin-top: 0;
+        }
+
+        .image-container {
+            position: relative;
+            display: inline-block;
+            width: 300px; /* Set initial image width */
+            float: left;
+            margin: 0 20px 10px 0;
+            cursor: pointer; /* Indicate that the image is clickable */
+            transition: all 0.3s ease; /* Smooth transition for all properties */
+        }
+
+        .image-container img {
+            width: 100%; /* Image width adapts to container */
+            transition: transform 0.3s ease; /* Smooth zoom effect */
+        }
+
+        .image-container img:hover {
+            transform: none; /* Disable image scaling */
+        }
+
+        .hover-text {
+            position: absolute;
+            bottom: 0; /* Position at the bottom */
+            left: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.7); /* Dark semi-transparent background */
+            color: #FFF;
+            display: flex; /* Center the text */
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            opacity: 0; /* Start with opacity 0 */
+            transition: opacity 0.3s ease, padding-top 0.3s ease; /* Smooth fade-in and padding transition */
+            font-size: 1.2rem; /* Initial font size */
+            padding: 0; /* Initial padding */
+        }
+
+        .image-container:hover .hover-text {
+            opacity: 1; /* Make the text visible */
+            padding-top: 7px; /* Add padding on hover */
+        }
+
+        .image-container:hover {
+            width: 100%; /* Expand image container to full width */
+            float: none; /* Remove floating */
+        }
+
+        .hover-text p {
+            margin: 0; /* Remove default paragraph margin */
+            padding: 0;
+            font-size: 0.7rem;
+            line-height: 1.4;
+        }
+
+        .teaching-item {
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #FDFEFE;
+            border-left: 5px solid #B8860B;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        .teaching-item:hover {
+            background: #E9D8A6;
+        }
+
+        .teaching-item h3 {
+            margin-top: 0;
+        }
+
+        .download-button {
+            background: #B8860B;
+            color: #fff;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .download-button:hover {
+            background: #DAA520;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            #home .profile {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+
+            #home .profile img {
+                margin-bottom: 20px;
+            }
+        }
+		
+		/* Contact Form */
+		.contact-form {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+			max-width: 100%; /* Ensure the form doesn't overflow the width */
+			width: 100%; /* Allow the form to use the full width of its container */
+			padding: 20px;
+			box-sizing: border-box; /* Includes padding in the width calculation */
+		}
+
+		.contact-form input,
+		.contact-form textarea {
+			width: 100%; /* Make inputs and textarea fill the form width */
+			max-width: 100%; /* Prevent inputs from going beyond their container */
+			padding: 15px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			font-size: 1rem;
+			box-sizing: border-box; /* Ensure padding doesn't increase the width */
+		}
+
+		.contact-form button {
+			padding: 15px 20px;
+			border: none;
+			background: #2C3E50;
+			color: #fff;
+			font-size: 1rem;
+			cursor: pointer;
+			border-radius: 4px;
+			transition: background 0.3s;
+		}
+
+		.contact-form button:hover {
+			background: #F39C12;
+		}
+
+		/* Responsive Design */
+		@media (max-width: 768px) {
+			.contact-form {
+				padding: 10px; /* Reduce padding on smaller screens */
+			}
+		}
+		  #contact {
+        text-align: center;
+        padding: 40px;
+        background-color: #f2f2f2;
+        border-radius: 8px;
+        max-width: 600px;
+        margin: 0 auto;
+		}
+
+		#contact a {
+			color: #2C3E50;
+			text-decoration: none;
+			font-weight: bold;
+			font-size: 1.2rem;
+		}
+
+		#contact a:hover {
+			color: #F39C12;
+			text-decoration: underline;
+		}
+					
+		
+		
+    </style>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <nav>
+        <a href="#home">Home</a>
+        <a href="#research">Research</a>
+        <a href="#teaching">Teaching</a>
+        <a href="#skills">Skills</a>
+        <a href="#contact">Contact</a>
+    </nav>
+
+    <!-- Home Section -->
+    <section id="home">
+        <h2>Welcome to My Professional CV</h2>
+        <div class="profile">
+            <img src="pp.jpeg" alt="Profile Photo">
+            <div class="intro">
+                <p>
+                    I am a final-year PhD candidate in Mathematics at Université Sorbonne Paris Nord, with my defense scheduled for November 2024. My research focuses on quantitative finance, where I aim to enhance traditional financial models by integrating stochastic analysis with machine learning and deep learning techniques.
+                </p>
+                <p>
+                    My doctoral work encompasses a broad spectrum of research areas, including market indicator diffusion, model calibration, change of measures, and data quality enhancement. These studies have led to contributions in various financial domains, such as pricing, risk management, and stress testing.
+                </p>
+                <p>
+                    In addition to my research, I am an adjunct lecturer at Université Paris Saclay, where I have taught <i>Machine Learning for finance</i> and tutored students in the <i>Data Camp</i> and <i>Cutting Edge Finance</i> Projects for the past three years.
+                </p>
+                <p>
+                    I am passionate about the intersection of stochastic analysis and artificial intelligence, and this website showcases my research and teaching experiences.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Research Section -->
+    <section id="research">
+        <h2>Research</h2>
+        <!-- Research Introduction Block -->
+        <div class="research-intro">
+            <p>
+                During my PhD, I have actively engaged in a productive collaboration with the financial industry, working closely with financial institutions, banks, and public organizations. This collaboration has enabled me to deepen my practical understanding of real-world challenges in financial mathematics and contribute to solving complex problems with innovative and efficient solutions. Thanks to this particularity of my PhD program (French CIFRE PhD program), I have worked on various topics in quantitative finance, including but not limited to:
+            </p>
+            <ul>
+                <li><strong>XVA Calculation:</strong> I have collaborated with experienced professionals to enhance and accelerate XVA valuations on portfolios of various derivatives, including currency swaps, interest rate swaps, callable derivatives, CMS swaps, and more. The initial objective was to perform a comparative analysis of different XVA calculation methods, specifically sensitivities, full-revaluation using Monte Carlo, and American Monte Carlo simulations. This analysis focused on both computational efficiency and the accuracy of calculations. The second objective was to optimize the overall XVA calculation process. This involved various coding and computational improvements, as well as an in-depth analysis to determine the most effective methods for computing EEPE.</li>
+                <li><strong>Market Risk Measurement:</strong> I have collaborated with an international institution to measure market risk on a portfolio comprising both derivatives and securities. This project was carried out in two main phases. The first phase involved modeling all indicators that influence the valuation of products within the portfolio, such as interest rates, exchange rates, credit spreads, and more. This phase required utilizing existing models for calibration, implementation, and back-testing, as well as developing new approaches that contributed to research publications (e.g., the credit spread article mentioned below). The second phase entailed the full re-valuation of the different products through Monte Carlo simulations of the scenarios generated from the models in the first phase, followed by the calculation of various risk indicators, such as VaR and ESF, across different time horizons.</li>
+                <li><strong>Stress Scenario Analysis:</strong> The issue of stress testing has been a recurring theme across many projects. In interactions with practitioners in areas such as market risk, credit risk, and even counterparty risk, the need for effective stress testing solutions often arose. The objective is generally to assess the impact of specific events on valuation or solvency. This work has included, for instance, translating the effects of commodity price fluctuations on the solvency of credit portfolios, analyzing how interest rate forecasts impact portfolio valuations, and evaluating the influence of rising CDS values on CVA. Some of my contributions in stress testing have been included in research publications (see the real-world article mentioned below).</li>
+            </ul>
+            <p>
+                In addition to the work described above, which has contributed to addressing real-world challenges, my research has led to articles that have been submitted for publication. Below, you will find their abstracts and links to the open-access preprints.
+            </p>
+        </div>
+        <!-- Research Articles Begin Here -->
+        <div class="research-item">
+            <div class="image-container">
+                <img src="rescovzc.png" alt="Research Image 3">
+                <div class="hover-text">
+                    <p>This figure compares some of the G2++ model parameters calibrated using our deep learning approach against the actual parameters (the second row is a zoomed-in version of the graphic in the first row).</p>
+                </div>
+            </div>
+            <h3>Deep Calibration of Interest Rates Model</h3>
+            <p><em>Abstract:</em> For any financial institution it is a necessity to be able to apprehend the behavior of interest rates. Despite the use of Deep Learning that is growing very fastly, due to many reasons (expertise, ease of use, ...) classic rates models such as CIR, or the Gaussian family are still being used widely. We propose to calibrate the five parameters of the G2++ model using Neural Networks. To achieve that, we construct synthetic data sets of parameters drawn uniformly from a reference set of parameters calibrated from the market. From those parameters, we compute Zero-Coupon and Forward rates and their covariances and correlations. Our first model is a Fully Connected Neural network and uses only covariances and correlations. We show that covariances are more suited to the problem than correlations. The second model is a Convolutional Neural Network using only Zero-Coupon rates with no transformation. The methods we propose perform very quickly (less than 0.3 seconds for 2,000 calibrations) and have low errors and good fitting. </p>
+            <p><span class="citation">Mohamed Ben Alaya, Ahmed Kebaier, Djibril Sarr, 2021. (Preprint available <a href="https://arxiv.org/abs/2110.15133" target="_blank">here</a>. A first version of this work was published in the <a href="https://jds22.sciencesconf.org/" target="_blank">2022 annual proceedings of the SFdS</a>, Société Française de Statistique, pages 906-911.)</span></p>
+        </div>
+
+        <div class="research-item">
+            <div class="image-container">
+                <img src="bcktst_rnp.png" alt="Research Illustration">
+                <div class="hover-text">
+                    <p>This figure shows the back-testing of the model, highlighting how the simulated credit spreads (shades of blue) closely follow and encompass the actual credit spread curve (black line) over time.</p>
+                </div>
+            </div>
+            <h3>Credit Spreads' Term Structure: Stochastic Modeling with CIR++ Intensity</h3>
+            <p><em>Abstract:</em> This paper introduces a novel stochastic model for credit spreads. The stochastic approach leverages the diffusion of default intensities via a CIR++ model and is formulated within a risk-neutral probability space. Our research primarily addresses two gaps in the literature. The first is the lack of credit spread models founded on a stochastic basis that enables continuous modeling, as many existing models rely on factorial assumptions. The second is the limited availability of models that directly yield a term structure of credit spreads. An intermediate result of our model is the provision of a term structure for the prices of defaultable bonds. We present the model alongside an innovative, practical, and conservative calibration approach that minimizes the error between historical and theoretical volatilities of default intensities. We demonstrate the robustness of both the model and its calibration process by comparing its behavior to historical credit spread values. Our findings indicate that the model not only produces realistic credit spread term structure curves but also exhibits consistent diffusion over time. Additionally, the model accurately fits the initial term structure of implied survival probabilities and provides an analytical expression for the credit spread of any given maturity at any future time. </p>
+            <p><span class="citation">Mohamed Ben Alaya, Ahmed Kebaier, Djibril Sarr, 2024. (Preprint available <a href="https://arxiv.org/abs/2409.09179" target="_blank">here</a>.)</span></p>
+        </div>
+
+        <div class="research-item">
+            <div class="image-container">
+                <img src="RW_CS_GS_1.png" alt="Research Image 4">
+                <div class="hover-text">
+                    <p>This figure shows how the expectation of the Real-World model (black line) closely matches any given credit spread (red line). The blue lines represent the 10% and 90% quantiles of the simulated credit spreads.</p>
+                </div>
+            </div>
+            <h3>Financial Stochastic Models Diffusion: From Risk-Neutral to Real-World Measure</h3>
+            <p><em>Abstract:</em> This research presents a comprehensive framework for transitioning financial diffusion models from the risk-neutral (RN) measure to the real-world (RW) measure, leveraging results from probability theory, specifically Girsanov's theorem. The RN measure, fundamental in derivative pricing, is contrasted with the RW measure, which incorporates risk premiums and better reflects actual market behavior and investor preferences, making it crucial for risk management. We address the challenges of incorporating real-world dynamics into financial models, such as accounting for market premiums, producing realistic term structures of market indicators, and fitting any arbitrarily given market curve. Our framework is designed to be general, applicable to a variety of diffusion models, including those with non-additive noise such as the CIR++ model. Through case studies involving Goldman Sachs' 2024 global credit outlook forecasts and the European Banking Authority (EBA) 2023 stress tests, we validate the robustness, practical relevance and applicability of our methodology. This work contributes to the literature by providing a versatile tool for better risk measures and enhancing the realism of financial models under the RW measure. Our model's versatility extends to stress testing and scenario analysis, providing practitioners with a powerful tool to evaluate various what-if scenarios and make well-informed decisions, particularly in pricing and risk management strategies.  </p>
+            <p><span class="citation">Mohamed Ben Alaya, Ahmed Kebaier, Djibril Sarr, 2024. (Preprint available <a href="https://arxiv.org/abs/2409.12783" target="_blank">here</a>.)</span></p>
+        </div>
+
+        <div class="research-item">
+            <div class="image-container">
+                <img src="DL_jumps_2_cut.png" alt="Research Image 2">
+                <div class="hover-text">
+                    <p>This figure shows a step in our typo detection algorithm. High Damerau-Levenshtein scores (black line) indicate word variations; drops below the threshold (red line) suggest different words.</p>
+                </div>
+            </div>
+            <h3>Towards Explainable Automated Data Quality Enhancement without Domain Knowledge</h3>
+            <p><em>Abstract:</em> In the era of big data, ensuring the quality of datasets has become increasingly crucial across various domains. We propose a comprehensive framework designed to automatically assess and rectify data quality issues in any given dataset, regardless of its specific content, focusing on both textual and numerical data. Our primary objective is to address three fundamental types of defects: absence, redundancy, and incoherence. At the heart of our approach lies a rigorous demand for both explainability and interpretability, ensuring that the rationale behind the identification and correction of data anomalies is transparent and understandable. To achieve this, we adopt a hybrid approach that integrates statistical methods with machine learning algorithms. Indeed, by leveraging statistical techniques alongside machine learning, we strike a balance between accuracy and explainability, enabling users to trust and comprehend the assessment process. Acknowledging the challenges associated with automating the data quality assessment process, particularly in terms of time efficiency and accuracy, we adopt a pragmatic strategy, employing resource-intensive algorithms only when necessary, while favoring simpler, more efficient solutions whenever possible. Through a practical analysis conducted on a publicly provided dataset, we illustrate the challenges that arise when trying to enhance data quality while keeping explainability. We demonstrate the effectiveness of our approach in detecting and rectifying missing values, duplicates and typographical errors as well as the challenges remaining to be addressed to achieve similar accuracy on statistical outliers and logic errors under the constraints set in our work.  </p>
+            <p><span class="citation">Djibril Sarr, 2024. (Preprint available <a href="https://arxiv.org/abs/2409.10139" target="_blank">here</a>. This work is substantially founded on the work presented at the 2021 Mathematics and Industry Challenge of AMIES, Agence pour les Mathématiques en Interaction avec l’Entreprise et la Société. This work was awarded the first prize in the <a href="https://challenge-maths.sciencesconf.org/?lang=fr" target="_blank">data quality competition</a>.)</span></p>
+        </div>
+    </section>
+
+    <!-- Teaching Section -->
+    <section id="teaching">
+        <h2>Teaching</h2>
+
+        <div class="teaching-item">
+            <h3>Machine Learning for Finance</h3>
+            <p><strong>Institution:</strong> <i>Master 2 Quantitative Finance, Université Paris Saclay</i> (Since 2022-2023)</p>
+            <p>
+                In this course, I introduce students to the field of machine learning (ML) and deep learning (DL) applied to finance. 
+                The curriculum begins by reinforcing fundamental ML/DL concepts such as logistic regressions and feedforward neural networks. 
+                The lectures then proceed with practical applications aimed at solving real-world problems, using Python and R. Key areas include:
+            </p>
+            <ul>
+                <li><strong>Algorithmic Trading:</strong> Exploring simple strategies for algorithmic trading using ML.</li>
+                <li><strong>Macroeconomic Indicator Clustering:</strong> Utilizing unsupervised learning techniques to cluster macroeconomic indicators for better selection of factors in multifactorial credit risk modeling.</li>
+                <li><strong>Deep Calibration of Financial Models:</strong> Applying DL techniques to improve calibration accuracy and computational cost for financial models.</li>
+            </ul>
+            <p>
+                Students leave the course equipped with essential knowledge and practical experience to apply ML and DL tools in various sectors of finance, most importantly, with knowledge of how to generalize the techniques seen in class to the problems they will encounter in their careers.
+            </p>
+            <button class="download-button">Download Course Material</button>
+        </div>
+
+        <div class="teaching-item">
+            <h3>Cutting Edge Finance</h3>
+            <p><strong>Institution:</strong> <i>Master 2 Quantitative Finance, Université Paris Saclay</i> (Since 2022-2023)</p>
+            <p>
+                This project-based course challenges students to solve real-world quantitative finance problems using advanced methodologies. As a tutor, I guide students through complex issues, providing guidance throughout the second semester.
+            </p>
+            <ul>
+                <li>2022-2023: Acceleration of Multi-Level Monte Carlo simulations through the integration of neural networks.</li>
+                <li>2023-2024: Calibration of countercyclical factors for counterparty credit risk models.</li>
+            </ul>
+            <p>
+                Students develop problem-solving skills, teamwork abilities, and gain exposure to innovative finance techniques used in professional settings.
+            </p>
+        </div>
+
+        <div class="teaching-item">
+            <h3>Data Camp</h3>
+            <p><strong>Institution:</strong> <i>Master 2 Data Science, Université Paris Saclay</i> (2021-2022)</p>
+            <p>
+                As a tutor, I supervised and mentored students participating in global Kaggle competitions. The objective was to expose students to competitive data science projects, emphasizing critical thinking, practical implementation, and teamwork. Key projects included:
+            </p>
+            <ul>
+                <li><strong>G-Research Crypto Forecasting:</strong> Students developed predictive models for cryptocurrency prices, working with complex time series data and financial indicators.</li>
+                <li><strong>APTOS 2019 Blindness Detection:</strong> In this project, students created computer vision models to classify retinal images and predict the severity of diabetic retinopathy.</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Skills Section -->
+    <section id="skills">
+        <h2>Skills</h2>
+        <div class="skills-section">
+            <!-- Category: Stochastic Analysis -->
+            <div class="skills-category">
+                <h3>Stochastic Analysis</h3>
+                <div class="skills-group">
+                    <span class="skill">Change of Measure</span>
+                    <span class="skill">Diffusion Models</span>
+                </div>
+            </div>
+
+            <!-- Category: Quantitative Finance -->
+            <div class="skills-category">
+                <h3>Quantitative Finance</h3>
+                <div class="skills-group">
+                    <span class="skill">Derivative Pricing</span>
+                    <span class="skill">XVA Calculations</span>
+                    <span class="skill">Risk Management</span>
+                    <span class="skill">Financial Data Analysis</span>
+                    <span class="skill">Stress Testing</span>
+                </div>
+            </div>
+
+            <!-- Category: Machine Learning and Deep Learning -->
+            <div class="skills-category">
+                <h3>Machine Learning and Deep Learning</h3>
+                <div class="skills-group">
+                    <span class="skill">Classification</span>
+                    <span class="skill">Regression</span>
+                    <span class="skill">Clustering</span>
+                    <span class="skill">Time Series Analysis</span>
+                </div>
+            </div>
+
+            <!-- Category: Programming Languages -->
+            <div class="skills-category">
+                <h3>Programming Languages</h3>
+                <div class="skills-group">
+                    <span class="skill">Python</span>
+                    <span class="skill">R</span>
+                    <span class="skill">C/C++</span>
+                    <span class="skill">Matlab</span>
+                    <span class="skill">SQL</span>
+                    <span class="skill">VBA</span>
+                </div>
+            </div>
+
+            <!-- Category: Soft Skills -->
+            <div class="skills-category">
+                <h3>Soft Skills</h3>
+                <div class="skills-group">
+                    <span class="skill">Teaching & Mentoring</span>
+                    <span class="skill">Analytical Thinking</span>
+                    <span class="skill">Effective Communication</span>
+                    <span class="skill">Team Collaboration</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+	 <!-- Contact Section -->
+	<section id="contact">
+		<h2>Contact</h2>
+		<p>If you would like to reach me, feel free to send an email to:</p>
+		<p><a href="mailto:contact@djibril-sarr.com">contact@djibril-sarr.com</a></p>
+	</section>
+
+
+</body>
+</html>
