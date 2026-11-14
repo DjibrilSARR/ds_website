@@ -207,6 +207,40 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .doc-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 300px; align-items: flex-start; }
 @media (pointer: coarse) { .linkbtn { padding: 10px 0; } }
 
+/* Recherche, visites, comparatif, aperçu */
+.search { flex: 0 1 360px; min-width: 0; }
+.search input { width: 100%; min-height: 38px; padding: 6px 12px; border: 1px solid var(--field-line); border-radius: 999px; background: var(--field); color: var(--fg); }
+@media (max-width: 640px) { .search { flex: 1 1 100%; } }
+.hit { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line-soft); background: transparent; padding: 10px 6px; cursor: pointer; }
+.hit:hover { background: var(--surface-2); }
+.hit-type { flex: 0 0 82px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.hit-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
+.hit-title { font-weight: 500; }
+#search-list { margin-top: 10px; }
+.flash { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+.vis-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.vis-head h2 { margin-bottom: 2px; }
+.cmp { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; }
+.cmp th, .cmp td { padding: 10px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--line-soft); font-weight: 400; }
+.cmp thead th { border-top: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.cmp .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmp tbody th { font-weight: 600; }
+.cmp th:first-child { padding-left: 0; }
+.cmp .best { font-weight: 700; }
+.best-tag { display: block; font-size: 12px; font-weight: 500; color: var(--accent); }
+dialog#viewer { width: min(1000px, 96vw); height: min(900px, 90vh); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg); overflow: hidden; }
+dialog#viewer[open] { display: flex; flex-direction: column; }
+dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
+.viewer-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.viewer-head h2 { font-family: var(--font-display); font-size: 16px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; flex: 1 1 200px; }
+.viewer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.viewer-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.viewer-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; background: var(--surface-2); }
+.viewer-body iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: #FFFFFF; }
+.viewer-body img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.viewer-body pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.viewer-msg, .viewer-hint { padding: 10px 14px; }
+
 /* Coûts */
 .params { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; align-items: end; }
 @media (max-width: 1000px) { .params { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -300,6 +334,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <p class="eyebrow">Chanteloup-les-Vignes</p>
       <h1>Vente de l'appartement</h1>
     </div>
+    <div class="search">
+      <label class="sr" for="q">Rechercher dans le site</label>
+      <input id="q" type="search" placeholder="Rechercher une tâche, une note, un document…" autocomplete="off">
+    </div>
   </div>
   <div class="wrap">
     <div class="filebar" id="filebar" data-state="warn" role="region" aria-label="Enregistrement des données">
@@ -333,6 +371,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <a href="#couts" data-tab="couts">Coûts</a>
     <a href="#agences" data-tab="agences">Agences</a>
     <a href="#questions" data-tab="questions">Questions</a>
+    <a href="#visites" data-tab="visites">Visites</a>
     <a href="#documents" data-tab="documents">Documents</a>
   </div>
 </nav>
@@ -375,6 +414,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <div class="card">
           <h2>Agences</h2>
           <div id="synth-ag"></div>
+        </div>
+        <div class="card">
+          <h2>Visites et offres</h2>
+          <p class="muted" id="synth-vis"></p>
+          <p style="margin-top:8px"><a href="#visites" data-tab="visites">Voir les visites</a></p>
         </div>
       </div>
     </div>
@@ -470,6 +514,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   </section>
 
   <section class="panel" id="p-agences" aria-label="Agences" hidden>
+    <div class="card">
+      <h2>Comparatif</h2>
+      <div id="ag-compare"></div>
+    </div>
     <div class="chips" id="ville-chips" role="group" aria-label="Filtrer par ville"></div>
     <p class="muted small">Notes Google relevées le 13 novembre 2026. Cochez « Comparer » pour ouvrir une colonne de réponses dans l'onglet Questions.</p>
     <div class="ag-grid" id="ag-list"></div>
@@ -498,6 +546,25 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     </div>
   </section>
 
+  <section class="panel" id="p-visites" aria-label="Visites et offres" hidden>
+    <div class="card vis-head">
+      <div>
+        <h2>Visites et offres</h2>
+        <p class="muted" id="vis-sum"></p>
+      </div>
+      <button type="button" class="btn btn-primary" id="add-vis">Ajouter une visite</button>
+    </div>
+    <div class="ag-grid" id="vis-list"></div>
+  </section>
+
+  <section class="panel" id="p-recherche" aria-label="Résultats de la recherche" hidden>
+    <div class="card">
+      <h2>Recherche</h2>
+      <p class="muted" id="search-sum" role="status"></p>
+      <div id="search-list"></div>
+    </div>
+  </section>
+
   <section class="panel" id="p-documents" aria-label="Documents" hidden>
     <div class="card">
       <h2>Ajouter des documents</h2>
@@ -511,10 +578,28 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <h2>Documents déposés</h2>
       <div id="doc-list"></div>
     </div>
+    <div class="card">
+      <h2>Sauvegarde complète</h2>
+      <p class="muted" style="margin-bottom:10px">Télécharge une archive zip avec toutes vos données et tous vos documents, à garder sur votre ordinateur.</p>
+      <button type="button" class="btn" id="backup-btn">Télécharger la sauvegarde</button>
+      <p class="small" id="backup-msg" role="status" style="margin-top:8px"></p>
+    </div>
   </section>
   <input type="file" id="doc-in" multiple hidden>
 
 </main>
+
+<dialog id="viewer" aria-labelledby="viewer-title">
+  <div class="viewer-head">
+    <h2 id="viewer-title"></h2>
+    <div class="viewer-actions">
+      <a class="btn" id="viewer-open" target="_blank" rel="noopener" hidden>Ouvrir dans un onglet</a>
+      <button type="button" class="btn" id="viewer-dl">Télécharger</button>
+      <button type="button" class="btn btn-primary" id="viewer-close">Fermer</button>
+    </div>
+  </div>
+  <div class="viewer-body" id="viewer-body"></div>
+</dialog>
 
 <script>
 (function () {
@@ -808,14 +893,15 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
   /* ---------- État et enregistrement sur GitHub ---------- */
 
-  var DOCS = ['reglages', 'etapes', 'couts', 'agences', 'reponses', 'documents'];
+  var DOCS = ['reglages', 'etapes', 'couts', 'agences', 'reponses', 'documents', 'visites'];
   var DEFAULTS = {
     reglages: { prix: 162500, mode: 'seul', tauxAgence: 5, crd: null, tauxPret: null },
     etapes: { items: {}, familles: {} },
     couts: { lignes: {}, perso: {} },
     agences: { fiches: {}, perso: {}, masquees: {} },
     reponses: { r: {} },
-    documents: { liste: {} }
+    documents: { liste: {} },
+    visites: { liste: {} }
   };
   var S = clone(DEFAULTS);
   var UI_KEY = 'vente-chanteloup-affichage';
@@ -1025,6 +1111,283 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     }
   }
 
+  /* ---------- Visites et offres ---------- */
+
+  var FINANCEMENTS = ['Non vérifié', 'Accord de principe de la banque', 'Attestation de financement fournie', 'Achat comptant', 'Doit vendre un bien avant'];
+  var INTERETS = ['Non précisé', 'Faible', 'Moyen', 'Fort'];
+  var OFFRES = ["Pas d'offre", 'Offre reçue', 'Contre-offre envoyée', 'Offre acceptée', 'Offre refusée', 'Offre retirée'];
+
+  function visList() {
+    var l = (S.visites && S.visites.liste) || {};
+    return Object.keys(l).filter(function (id) { return l[id] && !l[id].suppr; }).sort().reverse()
+      .map(function (id) { return Object.assign({ id: id }, l[id]); });
+  }
+  function visCard(v) {
+    function field(label, key, control, wide) {
+      var id = 'vis-' + v.id + '-' + key;
+      control.setAttribute('id', id);
+      control.setAttribute('data-doc', 'visites');
+      control.setAttribute('data-path', 'liste.' + v.id + '.' + key);
+      return h('div', { class: 'field' + (wide ? ' wide' : '') }, h('label', { for: id, text: label }), control);
+    }
+    function sel(opts) { return h('select', { 'data-kind': 'select' }, opts.map(function (o) { return h('option', { value: o, text: o }); })); }
+    return h('article', { class: 'card ag', 'data-vis': v.id },
+      h('div', { class: 'ag-fields' },
+        field('Visiteur', 'nom', h('input', { type: 'text', 'data-kind': 'text', autocomplete: 'off' })),
+        field('Date de la visite', 'date', h('input', { type: 'date', 'data-kind': 'text' })),
+        field('Téléphone ou e-mail', 'contact', h('input', { type: 'text', 'data-kind': 'text', autocomplete: 'off' })),
+        field('Venu par', 'source', h('input', { type: 'text', 'data-kind': 'text', placeholder: 'annonce, agence, bouche-à-oreille', autocomplete: 'off' })),
+        field('Financement', 'financement', sel(FINANCEMENTS)),
+        field('Intérêt', 'interet', sel(INTERETS)),
+        field('Retour après la visite', 'retour', h('textarea', { rows: '2', 'data-kind': 'text' }), true),
+        field("Montant de l'offre (€)", 'offre', h('input', { type: 'number', inputmode: 'numeric', min: '0', step: '500', 'data-kind': 'num' })),
+        field("Statut de l'offre", 'offreStatut', sel(OFFRES)),
+        field('Notes', 'notes', h('textarea', { rows: '2', 'data-kind': 'text' }), true)),
+      h('div', { class: 'ag-foot' },
+        h('span', { class: 'muted small', 'data-vispct': v.id }),
+        h('button', { type: 'button', class: 'btn-link', 'data-delvis': v.id, text: 'Supprimer' })));
+  }
+  function renderVisites() {
+    var list = visList(), box = $('#vis-list');
+    var sig = 'v:' + list.map(function (v) { return v.id; }).join(',');
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.replaceChildren.apply(box, list.length ? list.map(visCard)
+      : [h('p', { class: 'muted', text: "Aucune visite enregistrée. Ajoutez une fiche par visiteur pour suivre les retours et les offres." })]);
+    needFit = true;
+  }
+  function renderVisSummary() {
+    var list = visList(), prix = num(S.reglages.prix) || 0;
+    var offers = list.filter(function (v) { return num(v.offre) != null; });
+    var best = offers.reduce(function (m, v) { return Math.max(m, v.offre); }, 0);
+    var txt = list.length + (list.length > 1 ? ' visites' : ' visite') + ' · ' + offers.length + (offers.length > 1 ? ' offres' : ' offre');
+    if (offers.length) txt += ' · meilleure offre ' + eur(best) + (prix ? ' (' + Math.round(best / prix * 100) + ' % du prix)' : '');
+    if (!list.length) txt = 'Aucune visite enregistrée.';
+    $('#vis-sum').textContent = txt;
+    $('#synth-vis').textContent = txt;
+    $$('[data-vispct]').forEach(function (el) {
+      var v = (S.visites.liste || {})[el.dataset.vispct] || {}, o = num(v.offre);
+      el.textContent = o != null && prix ? 'Offre à ' + Math.round(o / prix * 100) + ' % du prix de vente' : '';
+    });
+    $$('.tabs a[data-tab="visites"]').forEach(function (a) { a.textContent = list.length ? 'Visites (' + list.length + ')' : 'Visites'; });
+  }
+
+  /* ---------- Comparatif des agences ---------- */
+
+  function parseFee(txt, base) {
+    var t = String(txt || '').replace(/\s/g, '').replace(',', '.');
+    var m = t.match(/(\d+(?:\.\d+)?)/);
+    if (!m) return null;
+    var n = Number(m[1]);
+    return (/%/.test(t) || n <= 20) ? Math.round(base * n / 100) : Math.round(n);
+  }
+  function renderCompare() {
+    var prix = num(S.reglages.prix) || 0;
+    var rows = allAgencies().map(function (a) {
+      var f = fiche(a.id), est = num(f.estimation);
+      if (est == null && !f.honoraires && !f.mandat) return null;
+      var base = est != null ? est : prix, fee = parseFee(f.honoraires, base);
+      return { nom: a.nom, statut: f.statut || STATUTS[0], est: est, hon: f.honoraires || '', fee: fee, net: fee != null ? base - fee : null, mandat: f.mandat || '' };
+    }).filter(Boolean);
+    var box = $('#ag-compare'), sig = JSON.stringify([rows, prix]);
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    if (!rows.length) {
+      box.replaceChildren(h('p', { class: 'muted', text: "Renseignez l'estimation et les honoraires dans les fiches ci-dessous : les agences apparaîtront ici côte à côte." }));
+      return;
+    }
+    var nets = rows.filter(function (r) { return r.net != null; }).map(function (r) { return r.net; });
+    var best = nets.length > 1 ? Math.max.apply(null, nets) : null;
+    var noEst = rows.some(function (r) { return r.est == null && r.fee != null; });
+    function td(t, cls) { return h('td', { class: cls || '', text: t }); }
+    box.replaceChildren(
+      h('div', { class: 'table-scroll' }, h('table', { class: 'cmp' },
+        h('thead', null, h('tr', null,
+          h('th', { scope: 'col', text: 'Agence' }), h('th', { scope: 'col', text: 'Statut' }),
+          h('th', { scope: 'col', class: 'num', text: 'Estimation' }), h('th', { scope: 'col', text: 'Honoraires annoncés' }),
+          h('th', { scope: 'col', class: 'num', text: 'Soit' }), h('th', { scope: 'col', class: 'num', text: "Net d'honoraires" }),
+          h('th', { scope: 'col', text: 'Mandat' }))),
+        h('tbody', null, rows.map(function (r) {
+          var isBest = best != null && r.net === best;
+          return h('tr', null,
+            h('th', { scope: 'row', text: r.nom }), td(r.statut),
+            td(r.est != null ? eur(r.est) : '—', 'num'), td(r.hon || '—'),
+            td(r.fee != null ? eur(r.fee) : '—', 'num'),
+            h('td', { class: 'num' + (isBest ? ' best' : '') }, r.net != null ? eur(r.net) + (r.est == null ? ' *' : '') : '—', isBest ? h('span', { class: 'best-tag', text: 'le plus élevé' }) : null),
+            td(r.mandat || '—'));
+        })))),
+      h('p', { class: 'muted small', style: 'margin-top:10px', text: "Net d'honoraires = estimation moins honoraires, avant les autres frais et le remboursement du prêt." + (noEst ? " * Sans estimation, le calcul part de votre prix de vente (" + eur(prix) + ")." : "") }));
+  }
+
+  /* ---------- Recherche ---------- */
+
+  function norm(t) { return String(t == null ? '' : t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+  function searchAll(q) {
+    var n = norm(q), out = [];
+    function hit() { for (var i = 0; i < arguments.length; i++) if (norm(arguments[i]).indexOf(n) >= 0) return true; return false; }
+    function add(type, title, sub, go) { out.push({ type: type, title: title, sub: sub || '', go: go }); }
+    FAMILIES.forEach(function (f) {
+      var fn = ((S.etapes.familles || {})[f.id] || {}).n || '';
+      if (hit(f.title, fn)) add('Famille', f.title, fn, { tab: 'etapes', fam: f.id, sel: '.fam[data-fam="' + f.id + '"]' });
+      f.items.forEach(function (it) {
+        var note = ((S.etapes.items || {})[it[0]] || {}).n || '';
+        if (hit(it[1], it[2], note)) add('Tâche', it[1], note ? 'Note : ' + note : f.title, { tab: 'etapes', fam: f.id, sel: '[data-li="' + it[0] + '"]' });
+      });
+    });
+    COSTS.forEach(function (c) { if (hit(c.l, c.h)) add('Coût', c.l, '', { tab: 'couts', sel: 'tr[data-cost="' + c.id + '"]' }); });
+    allAgencies().forEach(function (a) {
+      var f = fiche(a.id);
+      if (hit(a.nom, a.ville, a.tel, f.contact, f.notes, f.honoraires, f.mandat)) add('Agence', a.nom, f.notes || a.ville, { tab: 'agences', sel: '[data-ag="' + a.id + '"]' });
+    });
+    var cmp = allAgencies().filter(function (a) { return isCmp(a.id); });
+    QUESTIONS.forEach(function (g) { g.q.forEach(function (q) {
+      var ans = cmp.map(function (a) { var r = ((S.reponses.r || {})[a.id] || {})[q[0]]; return r ? a.nom + ' : ' + r : ''; }).filter(Boolean);
+      if (hit(q[1]) || ans.some(function (x) { return hit(x); })) add('Question', q[1], ans.filter(function (x) { return hit(x); })[0] || g.t, { tab: 'questions', sel: '[data-q="' + q[0] + '"]' });
+    }); });
+    visList().forEach(function (v) {
+      if (hit(v.nom, v.contact, v.source, v.retour, v.notes)) add('Visite', v.nom || 'Visiteur sans nom', v.retour || v.notes || '', { tab: 'visites', sel: '[data-vis="' + v.id + '"]' });
+    });
+    docList().forEach(function (d) {
+      if (hit(d.nom, ITEM_LABEL[d.item])) add('Document', d.nom, ITEM_LABEL[d.item] || '', { tab: 'documents', sel: '#doc-list [data-view="' + d.id + '"]' });
+    });
+    return out;
+  }
+  var searchHits = [];
+  function applySearch() {
+    var q = $('#q').value.trim(), panel = $('#p-recherche');
+    if (q.length < 2) { if (!panel.hidden) showTab(ui.tab); return; }
+    TABS.forEach(function (t) { $('#p-' + t).hidden = true; });
+    panel.hidden = false;
+    searchHits = searchAll(q);
+    var shown = searchHits.slice(0, 80);
+    $('#search-sum').textContent = searchHits.length
+      ? searchHits.length + (searchHits.length > 1 ? ' résultats' : ' résultat') + ' pour « ' + q + ' »' + (searchHits.length > shown.length ? ', les ' + shown.length + ' premiers sont affichés' : '')
+      : 'Aucun résultat pour « ' + q + ' ». Essayez un mot plus court.';
+    var box = $('#search-list');
+    box.replaceChildren.apply(box, shown.map(function (r, i) {
+      return h('button', { type: 'button', class: 'hit', 'data-hit': String(i) },
+        h('span', { class: 'hit-type', text: r.type }),
+        h('span', { class: 'hit-main' }, h('span', { class: 'hit-title', text: r.title }), r.sub ? h('span', { class: 'muted small', text: r.sub.length > 140 ? r.sub.slice(0, 140) + '…' : r.sub }) : null));
+    }));
+  }
+  function goHit(r) {
+    if (!r) return;
+    $('#q').value = '';
+    if (r.go.fam) showFam(r.go.fam);
+    if (r.go.tab === 'agences') ui.ville = 'Toutes';
+    showTab(r.go.tab);
+    refresh();
+    var el = $(r.go.sel);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center' });
+    el.classList.add('flash');
+    setTimeout(function () { el.classList.remove('flash'); }, 2500);
+  }
+
+  /* ---------- Aperçu d'un document ---------- */
+
+  var viewer = { id: '', url: '', blob: null, nom: '' };
+  var EXT_TYPES = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', txt: 'text/plain', csv: 'text/plain', md: 'text/plain', json: 'text/plain' };
+  function docKind(m) {
+    var ext = (String(m.nom).split('.').pop() || '').toLowerCase(), t = String(m.type || '').toLowerCase();
+    if (t === 'application/pdf' || ext === 'pdf') return { kind: 'pdf', mime: 'application/pdf' };
+    if (/^image\/(png|jpeg|gif|webp)$/.test(t)) return { kind: 'image', mime: t };
+    if (EXT_TYPES[ext] && EXT_TYPES[ext].indexOf('image/') === 0) return { kind: 'image', mime: EXT_TYPES[ext] };
+    if (EXT_TYPES[ext] === 'text/plain' || t === 'text/plain' || t === 'text/csv') return { kind: 'text', mime: 'text/plain;charset=utf-8' };
+    return { kind: 'other', mime: 'application/octet-stream' };
+  }
+  function viewDoc(id) {
+    var m = (S.documents.liste || {})[id];
+    if (!m) return;
+    if (!file.on) { docProblem(m.nom, m.item, "cet appareil n'est pas connecté à GitHub"); return; }
+    var dlg = $('#viewer'), body = $('#viewer-body'), k = docKind(m);
+    viewer = { id: id, url: '', blob: null, nom: m.nom };
+    $('#viewer-title').textContent = m.nom;
+    $('#viewer-open').hidden = true; $('#viewer-dl').disabled = true;
+    body.replaceChildren(h('p', { class: 'muted viewer-msg', text: 'Chargement de ' + m.nom + '…' }));
+    if (!dlg.open) { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); }
+    ghBlob(file.cfg, cpath(m.chemin)).then(function (b) {
+      if (viewer.id !== id) return;
+      var blob = new Blob([b], { type: k.mime });
+      viewer.blob = blob; viewer.url = URL.createObjectURL(blob);
+      $('#viewer-dl').disabled = false;
+      if (k.kind !== 'other') { $('#viewer-open').hidden = false; $('#viewer-open').setAttribute('href', viewer.url); }
+      if (k.kind === 'image') body.replaceChildren(h('img', { src: viewer.url, alt: m.nom }));
+      else if (k.kind === 'pdf') body.replaceChildren(h('iframe', { src: viewer.url, title: m.nom }), h('p', { class: 'muted small viewer-hint', text: "Si le PDF ne s'affiche pas (c'est fréquent sur téléphone), utilisez « Ouvrir dans un onglet »." }));
+      else if (k.kind === 'text') return blob.text().then(function (t) { if (viewer.id === id) body.replaceChildren(h('pre', { text: t.length > 300000 ? t.slice(0, 300000) + '\n…' : t })); });
+      else body.replaceChildren(h('p', { class: 'muted viewer-msg', text: "Pas d'aperçu pour ce type de fichier. Téléchargez-le pour l'ouvrir." }));
+    }).catch(function (e) {
+      if (viewer.id === id) body.replaceChildren(h('p', { class: 'doc-err viewer-msg', text: 'Affichage impossible : ' + ((e && e.message) || 'erreur inconnue') + '.' }));
+    });
+  }
+  function closeViewer() {
+    var dlg = $('#viewer');
+    if (dlg.open) { if (dlg.close) dlg.close(); else dlg.removeAttribute('open'); }
+    $('#viewer-body').replaceChildren();
+    if (viewer.url) URL.revokeObjectURL(viewer.url);
+    viewer = { id: '', url: '', blob: null, nom: '' };
+  }
+  function saveBlob(blob, name) {
+    var url = URL.createObjectURL(blob), a = h('a', { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  }
+
+  /* ---------- Sauvegarde complète (archive zip) ---------- */
+
+  var CRC_T = (function () { var t = [], c, n, k; for (n = 0; n < 256; n++) { c = n; for (k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(u) { var c = 0xFFFFFFFF; for (var i = 0; i < u.length; i++) c = CRC_T[(c ^ u[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function makeZip(entries) {
+    var enc = new TextEncoder(), parts = [], central = [], offset = 0, d = new Date();
+    var time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    var date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    entries.forEach(function (e) {
+      var nm = enc.encode(e.name), crc = crc32(e.data), sz = e.data.length;
+      var lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+      lh.setUint16(10, time, true); lh.setUint16(12, date, true); lh.setUint32(14, crc, true);
+      lh.setUint32(18, sz, true); lh.setUint32(22, sz, true); lh.setUint16(26, nm.length, true);
+      parts.push(lh.buffer, nm, e.data);
+      var ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+      ch.setUint16(12, time, true); ch.setUint16(14, date, true); ch.setUint32(16, crc, true);
+      ch.setUint32(20, sz, true); ch.setUint32(24, sz, true); ch.setUint16(28, nm.length, true); ch.setUint32(42, offset, true);
+      central.push(ch.buffer, nm);
+      offset += 30 + nm.length + sz;
+    });
+    var csize = 0; central.forEach(function (p) { csize += p.byteLength; });
+    var end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+    end.setUint32(12, csize, true); end.setUint32(16, offset, true);
+    return new Blob(parts.concat(central, [end.buffer]), { type: 'application/zip' });
+  }
+  var backupBusy = false;
+  function backupAll() {
+    if (backupBusy) return;
+    var msg = $('#backup-msg'), docs = file.on ? docList() : [], skipped = file.on ? 0 : docList().length;
+    var entries = [{ name: FILE_NAME, data: new TextEncoder().encode(serialize()) }], used = {}, failed = [], i = 0;
+    backupBusy = true; $('#backup-btn').disabled = true;
+    function next() {
+      if (i >= docs.length) return Promise.resolve();
+      var d = docs[i++];
+      msg.textContent = 'Récupération des documents : ' + i + ' sur ' + docs.length + '…';
+      return ghBlob(file.cfg, cpath(d.chemin)).then(function (b) { return b.arrayBuffer(); }).then(function (buf) {
+        var name = String(d.nom).replace(/[\\/:*?"<>|]+/g, '-') || 'document';
+        if (used[name.toLowerCase()]) name = d.id + '-' + name;
+        used[name.toLowerCase()] = true;
+        entries.push({ name: 'documents/' + name, data: new Uint8Array(buf) });
+      }, function () { failed.push(d.nom); }).then(next);
+    }
+    next().then(function () {
+      saveBlob(makeZip(entries), 'vente-sauvegarde-' + new Date().toISOString().slice(0, 10) + '.zip');
+      var n = entries.length - 1;
+      msg.textContent = 'Sauvegarde téléchargée : vos données et ' + n + (n > 1 ? ' documents' : ' document') + '.'
+        + (failed.length ? ' Non récupérés : ' + failed.join(', ') + '.' : '')
+        + (skipped ? " Les documents ne sont pas inclus car cet appareil n'est pas connecté à GitHub." : '');
+    }).catch(function (e) { msg.textContent = 'Sauvegarde impossible : ' + ((e && e.message) || 'erreur inconnue') + '.'; })
+      .then(function () { backupBusy = false; $('#backup-btn').disabled = false; });
+  }
+
   /* ---------- Documents ---------- */
 
   var MAX_DOC = 25 * 1024 * 1024;
@@ -1076,21 +1439,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     });
   }
 
-  function downloadDoc(id, btn) {
-    var m = (S.documents.liste || {})[id];
-    if (!m) return;
-    if (!file.on) { docProblem(m.nom, m.item, "cet appareil n'est pas connecté à GitHub"); return; }
-    var label = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Téléchargement de ' + m.nom + '…';
-    ghBlob(file.cfg, cpath(m.chemin)).then(function (b) {
-      var url = URL.createObjectURL(new Blob([b], { type: m.type || 'application/octet-stream' }));
-      var a = h('a', { href: url, download: m.nom });
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
-    }).catch(function (e) { docProblem(m.nom, m.item, (e && e.message) || 'erreur inconnue'); })
-      .then(function () { btn.disabled = false; btn.textContent = label; });
-  }
-
   function deleteDoc(id) {
     var m = (S.documents.liste || {})[id];
     if (!m) return;
@@ -1115,7 +1463,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     if (d.date) meta.push(new Date(d.date).toLocaleDateString('fr-FR'));
     return [
       h('div', { class: 'doc-main' },
-        h('button', { type: 'button', class: 'linkbtn', 'data-dl': d.id, title: 'Télécharger', text: d.nom }),
+        h('button', { type: 'button', class: 'linkbtn', 'data-view': d.id, title: 'Afficher', text: d.nom }),
         h('span', { class: 'muted small', text: meta.join(' · ') })),
       h('button', { type: 'button', class: 'btn-link', 'data-deldoc': d.id, text: compact ? 'Retirer' : 'Supprimer' })
     ];
@@ -1275,7 +1623,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   /* ---------- Construction de l'interface ---------- */
 
   var ui = { fam: 'credit', ville: 'Toutes', tab: 'synthese' };
-  var TABS = ['synthese', 'etapes', 'couts', 'agences', 'questions', 'documents'];
+  var TABS = ['synthese', 'etapes', 'couts', 'agences', 'questions', 'visites', 'documents'];
   var famById = {};
   FAMILIES.forEach(function (f) { famById[f.id] = f; });
 
@@ -1461,7 +1809,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     QUESTIONS.forEach(function (g) {
       kids.push(h('div', { class: 'qa-head' }, h('h3', { text: g.t }), sel.map(function (a) { return h('div', { class: 'qa-col', text: a.nom }); })));
       g.q.forEach(function (q) {
-        kids.push(h('div', { class: 'qa-row' },
+        kids.push(h('div', { class: 'qa-row', 'data-q': q[0] },
           h('p', { class: 'qa-q', text: q[1] }),
           sel.map(function (a) {
             var id = 'r-' + a.id + '-' + q[0];
@@ -1494,6 +1842,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     renderPersoCosts();
     renderAgences();
     renderQuestions();
+    renderVisites();
     refreshBindings();
 
     /* Étapes */
@@ -1558,6 +1907,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     $('#net-total').textContent = netTxt;
 
     renderDocs();
+    renderCompare();
+    renderVisSummary();
 
     /* Liens et agences retirées */
     $$('[data-sitelink]').forEach(function (a) {
@@ -1607,6 +1958,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     if (TABS.indexOf(name) < 0) name = 'synthese';
     ui.tab = name;
     TABS.forEach(function (t) { $('#p-' + t).hidden = t !== name; });
+    $('#p-recherche').hidden = true;
+    if ($('#q').value) $('#q').value = '';
     $$('.tabs a').forEach(function (a) {
       if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
@@ -1674,7 +2027,24 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     if (d.fb) { fbAction(d.fb); return; }
     if (d.attach) { pickDocs(d.attach); return; }
     if (b.id === 'doc-add-btn') { pickDocs($('#doc-item').value); return; }
-    if (d.dl) { downloadDoc(d.dl, b); return; }
+    if (d.view) { viewDoc(d.view); return; }
+    if (b.id === 'viewer-close') { closeViewer(); return; }
+    if (b.id === 'viewer-dl') { if (viewer.blob) saveBlob(viewer.blob, viewer.nom); return; }
+    if (b.id === 'backup-btn') { backupAll(); return; }
+    if (d.hit) { goHit(searchHits[Number(d.hit)]); return; }
+    if (b.id === 'add-vis') {
+      var vid = 'v' + Date.now().toString(36);
+      patch('visites', { liste: nest([vid], { date: new Date().toISOString().slice(0, 10) }) }, true);
+      refresh();
+      var vin = document.getElementById('vis-' + vid + '-nom');
+      if (vin) vin.focus();
+      return;
+    }
+    if (d.delvis) {
+      if (d.armed) patch('visites', { liste: nest([d.delvis], { suppr: true }) }, true);
+      else { d.armed = '1'; b.textContent = 'Confirmer la suppression'; }
+      return;
+    }
     if (d.dismiss) { dropPending(d.dismiss); return; }
     if (d.deldoc) {
       if (d.armed) deleteDoc(d.deldoc);
@@ -1713,6 +2083,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       if (file.on && !file.conflict) writeFile(); else renderBar();
     }).catch(function (err) { $('#gh-msg').textContent = "Import impossible : " + ((err && err.message) || 'fichier illisible') + "."; });
   });
+  $('#q').addEventListener('input', applySearch);
+  $('#viewer').addEventListener('close', closeViewer);
+  $('#viewer').addEventListener('click', function (e) { if (e.target === e.currentTarget) closeViewer(); });
   $('#doc-in').addEventListener('change', function (e) {
     var fs = Array.prototype.slice.call(e.target.files || []), item = pendingItem;
     e.target.value = '';
