@@ -193,6 +193,20 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   .item .seg button { flex: 1 1 0; }
 }
 
+.item-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.att { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; font-size: 13px; }
+.att-row { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; max-width: 100%; }
+.att-row .doc-main { flex: 0 1 auto; }
+.linkbtn { border: 0; background: transparent; padding: 3px 0; color: var(--accent); cursor: pointer; font-size: inherit; text-decoration: underline; text-align: left; overflow-wrap: anywhere; }
+.linkbtn:disabled { color: var(--muted); text-decoration: none; }
+.doc-err { color: var(--danger); overflow-wrap: anywhere; }
+.doc-add { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.doc-add .field { flex: 1 1 280px; }
+.doc-row { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.doc-row:first-child { border-top: 0; padding-top: 0; }
+.doc-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 300px; align-items: flex-start; }
+@media (pointer: coarse) { .linkbtn { padding: 10px 0; } }
+
 /* Coûts */
 .params { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; align-items: end; }
 @media (max-width: 1000px) { .params { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -319,6 +333,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <a href="#couts" data-tab="couts">Coûts</a>
     <a href="#agences" data-tab="agences">Agences</a>
     <a href="#questions" data-tab="questions">Questions</a>
+    <a href="#documents" data-tab="documents">Documents</a>
   </div>
 </nav>
 
@@ -482,6 +497,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div class="qa-scroll"><div class="qa qa-empty" id="qa"></div></div>
     </div>
   </section>
+
+  <section class="panel" id="p-documents" aria-label="Documents" hidden>
+    <div class="card">
+      <h2>Ajouter des documents</h2>
+      <div class="doc-add">
+        <div class="field"><label for="doc-item">Rattacher à une tâche (facultatif)</label><select id="doc-item"><option value="">Aucune tâche</option></select></div>
+        <button type="button" class="btn btn-primary" id="doc-add-btn">Choisir des fichiers</button>
+      </div>
+      <p class="muted small" style="margin-top:10px">25 Mo maximum par fichier. Les documents sont rangés dans le dossier « documents » de votre dépôt privé. Ne déposez pas de pièce d'identité, de RIB ni de titre de propriété.</p>
+    </div>
+    <div class="card">
+      <h2>Documents déposés</h2>
+      <div id="doc-list"></div>
+    </div>
+  </section>
+  <input type="file" id="doc-in" multiple hidden>
 
 </main>
 
@@ -777,13 +808,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
   /* ---------- État et enregistrement sur GitHub ---------- */
 
-  var DOCS = ['reglages', 'etapes', 'couts', 'agences', 'reponses'];
+  var DOCS = ['reglages', 'etapes', 'couts', 'agences', 'reponses', 'documents'];
   var DEFAULTS = {
     reglages: { prix: 162500, mode: 'seul', tauxAgence: 5, crd: null, tauxPret: null },
     etapes: { items: {}, familles: {} },
     couts: { lignes: {}, perso: {} },
     agences: { fiches: {}, perso: {}, masquees: {} },
-    reponses: { r: {} }
+    reponses: { r: {} },
+    documents: { liste: {} }
   };
   var S = clone(DEFAULTS);
   var UI_KEY = 'vente-chanteloup-affichage';
@@ -827,10 +859,28 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     } catch (e) { /* stockage indisponible */ }
   }
 
-  function b64enc(s) {
-    var b = new TextEncoder().encode(s), o = '';
+  function b64bytes(b) {
+    var o = '';
     for (var i = 0; i < b.length; i += 0x8000) o += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
     return btoa(o);
+  }
+  function b64enc(s) { return b64bytes(new TextEncoder().encode(s)); }
+  /* GitHub refuse deux écritures simultanées dans un même dépôt : elles passent l'une après l'autre. */
+  var ghChain = Promise.resolve();
+  function queued(fn) {
+    var p = ghChain.then(fn, fn);
+    ghChain = p.catch(function () {});
+    return p;
+  }
+  function cpath(p) { return '/contents/' + String(p).split('/').map(encodeURIComponent).join('/'); }
+  function ghBlob(cfg, path) {
+    return fetch(API + '/repos/' + cfg.repo + path, {
+      cache: 'no-store',
+      headers: { 'Accept': 'application/vnd.github.raw+json', 'Authorization': 'Bearer ' + cfg.token, 'X-GitHub-Api-Version': '2022-11-28' }
+    }).then(function (r) {
+      if (!r.ok) throw httpErr({ status: r.status });
+      return r.blob();
+    }, function () { throw new Error('pas de connexion à GitHub'); });
   }
   function b64dec(s) {
     var bin = atob(String(s).replace(/\s/g, '')), b = new Uint8Array(bin.length);
@@ -899,11 +949,19 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     if (file.saving) { file.again = true; return Promise.resolve(); }
     var cfg = file.cfg, rev = file.rev, text = serialize();
     file.saving = true; file.error = ''; renderBar();
-    var pre = force === true ? readRemote(cfg).then(function (r) { file.sha = r.exists ? r.sha : null; }) : Promise.resolve();
-    return pre.then(function () {
+    function put(retried) {
       var body = { message: 'Mise à jour des données de la vente', content: b64enc(text) };
       if (file.sha) body.sha = file.sha;
-      return gh(cfg, 'PUT', fpath(cfg), body);
+      return gh(cfg, 'PUT', fpath(cfg), body).then(function (r) {
+        if ((r.status !== 409 && r.status !== 422) || retried) return r;
+        return readRemote(cfg).then(function (x) {
+          return (x.exists ? x.sha === file.sha : !file.sha) ? put(true) : r;
+        });
+      });
+    }
+    return queued(function () {
+      var pre = force === true ? readRemote(cfg).then(function (r) { file.sha = r.exists ? r.sha : null; }) : Promise.resolve();
+      return pre.then(function () { return put(false); });
     }).then(function (r) {
       if (r.status === 409 || r.status === 422) { var e = new Error('conflit'); e.conflict = true; throw e; }
       if (!r.ok) throw httpErr(r);
@@ -967,6 +1025,141 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     }
   }
 
+  /* ---------- Documents ---------- */
+
+  var MAX_DOC = 25 * 1024 * 1024;
+  var pending = [];
+  var pendingItem = '';
+  var ITEM_LABEL = {};
+  FAMILIES.forEach(function (f) { f.items.forEach(function (it) { ITEM_LABEL[it[0]] = it[1]; }); });
+
+  function docList() {
+    var l = (S.documents && S.documents.liste) || {};
+    return Object.keys(l).filter(function (id) { return l[id] && !l[id].suppr && l[id].chemin; })
+      .map(function (id) { return Object.assign({ id: id }, l[id]); })
+      .sort(function (a, b) { return String(b.date || '').localeCompare(String(a.date || '')); });
+  }
+  function safeName(n) {
+    var s = String(n).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '');
+    return s.slice(-80) || 'document';
+  }
+  function fmtSize(n) {
+    n = Number(n) || 0;
+    if (n < 1024 * 1024) return Math.max(1, Math.round(n / 1024)) + ' Ko';
+    return (n / 1024 / 1024).toFixed(1).replace('.', ',') + ' Mo';
+  }
+  function dropPending(id) { pending = pending.filter(function (p) { return p.id !== id; }); scheduleRefresh(); }
+  function docProblem(nom, item, msg) {
+    pending.push({ id: 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), nom: nom, item: item || '', etat: 'erreur', msg: msg });
+    scheduleRefresh();
+  }
+
+  function uploadDoc(f, item) {
+    var id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    var pend = { id: id, nom: f.name, item: item || '', etat: 'envoi', msg: '' };
+    pending.push(pend); scheduleRefresh();
+    var chemin = 'documents/' + id + '-' + safeName(f.name), cfg = file.cfg;
+    return Promise.resolve().then(function () {
+      if (!file.on) throw new Error("cet appareil n'est pas connecté à GitHub");
+      if (f.size > MAX_DOC) throw new Error('fichier trop lourd (25 Mo maximum)');
+      if (!f.size) throw new Error('fichier vide');
+      return f.arrayBuffer();
+    }).then(function (buf) {
+      var content = b64bytes(new Uint8Array(buf));
+      return queued(function () { return gh(cfg, 'PUT', cpath(chemin), { message: 'Ajout du document ' + f.name, content: content }); });
+    }).then(function (r) {
+      if (!r.ok) throw httpErr(r);
+      pending = pending.filter(function (p) { return p !== pend; });
+      patch('documents', { liste: nest([id], { nom: f.name, chemin: chemin, taille: f.size, type: f.type || '', date: new Date().toISOString(), item: item || '', sha: (r.j.content && r.j.content.sha) || '' }) }, true);
+    }).catch(function (e) {
+      pend.etat = 'erreur'; pend.msg = (e && e.message) || 'erreur inconnue'; scheduleRefresh();
+    });
+  }
+
+  function downloadDoc(id, btn) {
+    var m = (S.documents.liste || {})[id];
+    if (!m) return;
+    if (!file.on) { docProblem(m.nom, m.item, "cet appareil n'est pas connecté à GitHub"); return; }
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Téléchargement de ' + m.nom + '…';
+    ghBlob(file.cfg, cpath(m.chemin)).then(function (b) {
+      var url = URL.createObjectURL(new Blob([b], { type: m.type || 'application/octet-stream' }));
+      var a = h('a', { href: url, download: m.nom });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    }).catch(function (e) { docProblem(m.nom, m.item, (e && e.message) || 'erreur inconnue'); })
+      .then(function () { btn.disabled = false; btn.textContent = label; });
+  }
+
+  function deleteDoc(id) {
+    var m = (S.documents.liste || {})[id];
+    if (!m) return;
+    if (!file.on) { docProblem(m.nom, m.item, "cet appareil n'est pas connecté à GitHub"); return; }
+    var cfg = file.cfg;
+    function del(sha, retried) {
+      return gh(cfg, 'DELETE', cpath(m.chemin), { message: 'Suppression du document ' + m.nom, sha: sha }).then(function (r) {
+        if ((r.status !== 409 && r.status !== 422) || retried) return r;
+        return gh(cfg, 'GET', cpath(m.chemin)).then(function (x) { return x.ok && x.j.sha ? del(x.j.sha, true) : (x.status === 404 ? x : r); });
+      });
+    }
+    queued(function () { return del(m.sha || '', false); }).then(function (r) {
+      if (!r.ok && r.status !== 404) throw httpErr(r);
+      patch('documents', { liste: nest([id], { suppr: true }) }, true);
+    }).catch(function (e) { docProblem(m.nom, m.item, 'suppression impossible : ' + ((e && e.message) || 'erreur inconnue')); });
+  }
+
+  function docRowEls(d, compact) {
+    var meta = [];
+    if (!compact) { meta.push(d.item && ITEM_LABEL[d.item] ? ITEM_LABEL[d.item] : 'Aucune tâche'); }
+    meta.push(fmtSize(d.taille));
+    if (d.date) meta.push(new Date(d.date).toLocaleDateString('fr-FR'));
+    return [
+      h('div', { class: 'doc-main' },
+        h('button', { type: 'button', class: 'linkbtn', 'data-dl': d.id, title: 'Télécharger', text: d.nom }),
+        h('span', { class: 'muted small', text: meta.join(' · ') })),
+      h('button', { type: 'button', class: 'btn-link', 'data-deldoc': d.id, text: compact ? 'Retirer' : 'Supprimer' })
+    ];
+  }
+  function pendRowEls(p) {
+    return p.etat === 'envoi'
+      ? [h('span', { class: 'muted', text: 'Envoi de ' + p.nom + '…' })]
+      : [h('span', { class: 'doc-err', text: p.nom + ' : ' + p.msg + '.' }), h('button', { type: 'button', class: 'linkbtn', 'data-dismiss': p.id, text: 'Fermer' })];
+  }
+
+  function renderDocs() {
+    var docs = docList(), byItem = {}, pendByItem = {};
+    docs.forEach(function (d) { if (d.item) (byItem[d.item] = byItem[d.item] || []).push(d); });
+    pending.forEach(function (p) { if (p.item) (pendByItem[p.item] = pendByItem[p.item] || []).push(p); });
+    $$('[data-att]').forEach(function (box) {
+      var id = box.dataset.att, ds = byItem[id] || [], ps = pendByItem[id] || [];
+      var sig = JSON.stringify([ds.map(function (d) { return [d.id, d.nom]; }), ps.map(function (p) { return [p.id, p.etat]; })]);
+      if (box.dataset.sig === sig) return;
+      box.dataset.sig = sig;
+      var kids = ds.map(function (d) { return h('div', { class: 'att-row' }, docRowEls(d, true)); });
+      ps.forEach(function (p) { kids.push(h('div', { class: 'att-row' }, pendRowEls(p))); });
+      kids.push(h('button', { type: 'button', class: 'linkbtn', 'data-attach': id, text: 'Joindre un document' }));
+      box.replaceChildren.apply(box, kids);
+    });
+    var list = $('#doc-list');
+    var sig = JSON.stringify([docs.map(function (d) { return [d.id, d.nom, d.item]; }), pending.map(function (p) { return [p.id, p.etat]; }), file.on]);
+    if (list.dataset.sig !== sig) {
+      list.dataset.sig = sig;
+      var rows = pending.map(function (p) { return h('div', { class: 'doc-row' }, pendRowEls(p)); });
+      docs.forEach(function (d) { rows.push(h('div', { class: 'doc-row' }, docRowEls(d, false))); });
+      if (!rows.length) rows.push(h('p', { class: 'muted', text: file.on
+        ? "Aucun document pour l'instant. Ajoutez-les ici, ou depuis une tâche de l'onglet Étapes avec « Joindre un document »."
+        : "Connectez cet appareil à GitHub (bouton « Connecter » en haut de la page) pour déposer et consulter vos documents." }));
+      list.replaceChildren.apply(list, rows);
+    }
+    var n = docs.length;
+    $$('.tabs a[data-tab="documents"]').forEach(function (a) { a.textContent = n ? 'Documents (' + n + ')' : 'Documents'; });
+  }
+  function pickDocs(item) {
+    if (!file.on) { showForm(true); window.scrollTo(0, 0); return; }
+    pendingItem = item || '';
+    $('#doc-in').click();
+  }
+
   function renderBar() {
     var bar = $('#filebar'), state = 'warn', text, btns = [];
     function B(a, label, primary) { btns.push([a, label, primary ? 1 : 0]); }
@@ -999,6 +1192,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     if (bar.dataset.sig === sig) return;
     bar.dataset.sig = sig;
     bar.dataset.state = state;
+    scheduleRefresh();
     $('#fb-text').textContent = text;
     var box = $('#fb-actions');
     box.replaceChildren.apply(box, btns.map(function (b) {
@@ -1081,7 +1275,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   /* ---------- Construction de l'interface ---------- */
 
   var ui = { fam: 'credit', ville: 'Toutes', tab: 'synthese' };
-  var TABS = ['synthese', 'etapes', 'couts', 'agences', 'questions'];
+  var TABS = ['synthese', 'etapes', 'couts', 'agences', 'questions', 'documents'];
   var famById = {};
   FAMILIES.forEach(function (f) { famById[f.id] = f; });
 
@@ -1130,7 +1324,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             h('button', { type: 'button', 'data-item': id, 'data-s': 'todo', 'aria-pressed': 'true', text: 'À faire' }),
             h('button', { type: 'button', 'data-item': id, 'data-s': 'done', 'aria-pressed': 'false', text: 'Fait' }),
             h('button', { type: 'button', 'data-item': id, 'data-s': 'na', 'aria-pressed': 'false', text: 'Sans objet' })),
-          h('textarea', { id: 'n-' + id, class: 'note', rows: '1', placeholder: 'Ajouter une note', 'aria-label': 'Note : ' + label, 'data-doc': 'etapes', 'data-path': 'items.' + id + '.n', 'data-kind': 'text' })));
+          h('div', { class: 'item-side' },
+            h('textarea', { id: 'n-' + id, class: 'note', rows: '1', placeholder: 'Ajouter une note', 'aria-label': 'Note : ' + label, 'data-doc': 'etapes', 'data-path': 'items.' + id + '.n', 'data-kind': 'text' }),
+            h('div', { class: 'att', 'data-att': id }))));
       });
       body.appendChild(h('section', { class: 'fam card', 'data-fam': f.id, 'aria-labelledby': 'fh-' + f.id, hidden: true },
         h('div', { class: 'fam-head' },
@@ -1361,6 +1557,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     $('#net-crd').textContent = crd != null ? '− ' + eur(crd) : 'à saisir';
     $('#net-total').textContent = netTxt;
 
+    renderDocs();
+
     /* Liens et agences retirées */
     $$('[data-sitelink]').forEach(function (a) {
       var u = String(fiche(a.dataset.sitelink).site || a.dataset.default || '').trim();
@@ -1474,6 +1672,15 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       return;
     }
     if (d.fb) { fbAction(d.fb); return; }
+    if (d.attach) { pickDocs(d.attach); return; }
+    if (b.id === 'doc-add-btn') { pickDocs($('#doc-item').value); return; }
+    if (d.dl) { downloadDoc(d.dl, b); return; }
+    if (d.dismiss) { dropPending(d.dismiss); return; }
+    if (d.deldoc) {
+      if (d.armed) deleteDoc(d.deldoc);
+      else { d.armed = '1'; b.textContent = 'Confirmer la suppression'; }
+      return;
+    }
     if (b.id === 'ag-restore') {
       var back = {};
       Object.keys(S.agences.masquees || {}).forEach(function (k) { back[k] = false; });
@@ -1506,6 +1713,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       if (file.on && !file.conflict) writeFile(); else renderBar();
     }).catch(function (err) { $('#gh-msg').textContent = "Import impossible : " + ((err && err.message) || 'fichier illisible') + "."; });
   });
+  $('#doc-in').addEventListener('change', function (e) {
+    var fs = Array.prototype.slice.call(e.target.files || []), item = pendingItem;
+    e.target.value = '';
+    fs.forEach(function (f) { uploadDoc(f, item); });
+  });
   $('#gh-form').addEventListener('submit', function (e) {
     e.preventDefault();
     var repo = $('#gh-repo').value.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
@@ -1528,11 +1740,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   });
   setInterval(function () { if (document.visibilityState === 'visible') checkExternal(); }, 30000);
   window.addEventListener('beforeunload', function (e) {
-    if (file.dirty && file.on) { e.preventDefault(); e.returnValue = ''; }
+    if ((file.dirty && file.on) || pending.some(function (p) { return p.etat === 'envoi'; })) { e.preventDefault(); e.returnValue = ''; }
   });
 
   /* ---------- Démarrage ---------- */
 
+  (function () {
+    var sel = $('#doc-item');
+    FAMILIES.forEach(function (f, i) {
+      sel.appendChild(h('optgroup', { label: (i + 1) + '. ' + f.title }, f.items.map(function (it) { return h('option', { value: it[0], text: it[1] }); })));
+    });
+  })();
   loadUi();
   buildSynth();
   buildEtapes();
