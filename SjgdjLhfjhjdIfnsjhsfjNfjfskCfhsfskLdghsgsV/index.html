@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="referrer" content="no-referrer">
-<title>Vente appartement Chanteloup</title>
+<title>Suivi de vente</title>
 <style>
 /* Mise en page : en-tête compact, barre d'onglets collante, un panneau par onglet.
    Grilles larges sur PC, qui s'empilent en une colonne sur téléphone. */
@@ -218,6 +218,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .hit-title { font-weight: 500; }
 #search-list { margin-top: 10px; }
 .flash { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+.ag-empty { display: flex; flex-direction: column; gap: 12px; grid-column: 1 / -1; }
 .vis-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .vis-head h2 { margin-bottom: 2px; }
 .cmp { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; }
@@ -331,8 +332,8 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
 <header class="top">
   <div class="wrap top-in">
     <div>
-      <p class="eyebrow">Chanteloup-les-Vignes</p>
-      <h1>Vente de l'appartement</h1>
+      <p class="eyebrow" id="hd-ville" hidden></p>
+      <h1 id="hd-titre">Vente de l'appartement</h1>
     </div>
     <div class="search">
       <label class="sr" for="q">Rechercher dans le site</label>
@@ -382,7 +383,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     <div class="stats">
       <div class="stat">
         <label class="stat-label" for="prix-synth">Prix de vente</label>
-        <div class="money"><input id="prix-synth" type="number" inputmode="numeric" min="0" step="500" data-doc="reglages" data-path="prix" data-kind="num"><span>€</span></div>
+        <div class="money"><input id="prix-synth" type="number" inputmode="numeric" min="0" step="500" placeholder="à saisir" data-doc="reglages" data-path="prix" data-kind="num"><span>€</span></div>
         <p class="stat-sub">Honoraires d'agence inclus</p>
       </div>
       <div class="stat">
@@ -422,6 +423,14 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
         </div>
       </div>
     </div>
+    <div class="card">
+      <h2>Réglages</h2>
+      <div class="ag-fields">
+        <div class="field"><label for="set-titre">Titre de la page</label><input id="set-titre" type="text" placeholder="Vente de l'appartement" autocomplete="off" data-doc="reglages" data-path="titre" data-kind="text"></div>
+        <div class="field"><label for="set-ville">Commune du bien</label><input id="set-ville" type="text" autocomplete="off" data-doc="reglages" data-path="ville" data-kind="text"></div>
+      </div>
+      <p class="muted small" style="margin-top:8px">Enregistrés avec vos données, ils ne s'affichent que sur les appareils connectés.</p>
+    </div>
   </section>
 
   <section class="panel" id="p-etapes" aria-label="Étapes" hidden>
@@ -439,7 +448,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     <div class="card params">
       <div class="field">
         <label for="prix-couts">Prix de vente</label>
-        <div class="money"><input id="prix-couts" type="number" inputmode="numeric" min="0" step="500" data-doc="reglages" data-path="prix" data-kind="num"><span>€</span></div>
+        <div class="money"><input id="prix-couts" type="number" inputmode="numeric" min="0" step="500" placeholder="à saisir" data-doc="reglages" data-path="prix" data-kind="num"><span>€</span></div>
       </div>
       <div class="field">
         <span class="lab" id="mode-lab">Mode de vente</span>
@@ -519,7 +528,8 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       <div id="ag-compare"></div>
     </div>
     <div class="chips" id="ville-chips" role="group" aria-label="Filtrer par ville"></div>
-    <p class="muted small">Notes Google relevées le 13 novembre 2026. Cochez « Comparer » pour ouvrir une colonne de réponses dans l'onglet Questions.</p>
+    <p class="muted small">Cochez « Comparer » sur une fiche pour ouvrir une colonne de réponses dans l'onglet Questions.</p>
+    <p class="small" id="ag-msg" role="status"></p>
     <div class="ag-grid" id="ag-list"></div>
     <div><button type="button" class="btn" id="ag-restore" hidden></button></div>
     <form class="card" id="add-ag" novalidate>
@@ -773,28 +783,12 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
   var COSTS = [];
   COST_GROUPS.forEach(function (g) { g.rows.forEach(function (r) { COSTS.push(r); }); });
 
-  var AGENCIES = [
-    { id: 'acr', nom: "ACR Immobilier", ville: "Andrésy", tel: "01 72 54 70 44", note: "4,9", avis: 154, site: "http://www.acr-immo.fr/" },
-    { id: 'davril', nom: "Davril Andrésy", ville: "Andrésy", tel: "01 39 74 67 26", note: "4,6", avis: 194, site: "https://www.vicenzimmobilier.fr/" },
-    { id: 'original', nom: "Immobilier Original Place des Arts", ville: "Andrésy", tel: "01 30 74 74 74", note: "4,8", avis: 18, site: "https://www.immoriginal.com/" },
-    { id: 'residence-andresy', nom: "La Résidence Andrésy", ville: "Andrésy", tel: "01 39 75 00 32", note: "4,3", avis: 47, site: "https://www.laresidence.fr/agences-immobilieres/andresy" },
-    { id: 'orpi', nom: "Orpi Rive de Seine", ville: "Triel-sur-Seine", tel: "01 39 74 74 74", note: "4,6", avis: 211, site: "https://www.orpi.com/rivedeseine/" },
-    { id: 'weelodge-triel', nom: "Weelodge Triel", ville: "Triel-sur-Seine", tel: "01 86 37 13 00", note: "4,8", avis: 90, site: "https://www.weelodge.fr/office/office-weelodge-triel" },
-    { id: 'centre', nom: "L'Agence du Centre", ville: "Carrières-sous-Poissy", tel: "01 39 74 01 28", note: "4,8", avis: 150, site: "https://www.lagenceducentre.fr/" },
-    { id: 'gim', nom: "GIM – Gestion Immobilière Moderne", ville: "Poissy", tel: "01 39 27 12 00", site: "https://www.gim-immo.fr/", info: "17 rue de la Gare. Cabinet familial fondé en 1990, avec une agence à Andrésy. Vente, gestion locative et syndic. Actif à Chanteloup : vérifier s'il est le syndic de votre immeuble." },
-    { id: 'immo-poissy', nom: "L'Immobilière de Poissy", ville: "Poissy", tel: "01 39 77 35 91", note: "4,8", avis: 109, site: "https://www.limmobilieredepoissy.com" },
-    { id: 'principale', nom: "Agence Principale Poissy", ville: "Poissy", tel: "01 30 06 69 69", note: "4,7", avis: 402, site: "https://agenceprincipalepoissy.com" },
-    { id: 'adresse', nom: "L'Adresse Poissy", ville: "Poissy", tel: "01 39 11 23 65", note: "4,6", avis: 235, site: "https://www.ladresse.com/agence/l-adresse-poissy/120" },
-    { id: 'residence-poissy', nom: "La Résidence Poissy", ville: "Poissy", tel: "01 30 06 15 50", note: "4,2", avis: 157, site: "https://www.laresidence.fr/" },
-    { id: 'saint-louis', nom: "Saint-Louis Immobilier", ville: "Poissy", tel: "01 30 65 30 31", note: "4,1", avis: 319, site: "https://www.stlouis-immo.fr" },
-    { id: 'gimcovermeille', nom: "Gimcovermeille", ville: "Poissy", tel: "01 30 65 95 22", note: "4,2", avis: 102, info: "Agence différente de GIM, malgré le nom proche.", site: "https://www.gimcovermeille.com" }
-  ];
 
   var STATUTS = ["À contacter", "Contactée", "Rendez-vous pris", "Estimation reçue", "Retenue", "Écartée"];
 
   var QUESTIONS = [
     { t: "Connaissance du secteur", q: [
-      ['q1', "Combien de ventes avez-vous conclues à Chanteloup depuis 12 mois, et dans quel quartier ou quelle résidence ?"],
+      ['q1', "Combien de ventes avez-vous conclues {dans_ville} depuis 12 mois, et dans quel quartier ou quelle résidence ?"],
       ['q2', "Quel est votre délai moyen de vente, et l'écart moyen entre prix affiché et prix signé ?"],
       ['q3', "Êtes-vous le syndic de mon immeuble, ou le connaissez-vous déjà ?"],
       ['q4', "Quel est le numéro de carte professionnelle (carte T) de l'agence ?"]
@@ -835,6 +829,10 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       ['q27', "Si je commence seul, accepteriez-vous ensuite un mandat simple à un taux réduit ?"]
     ] }
   ];
+  function qt(t) {
+    var v = String((S.reglages && S.reglages.ville) || '').trim();
+    return t.replace('{dans_ville}', v ? 'à ' + v : 'dans ma commune');
+  }
   var Q_COUNT = 0;
   QUESTIONS.forEach(function (g) { Q_COUNT += g.q.length; });
 
@@ -895,7 +893,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
 
   var DOCS = ['reglages', 'etapes', 'couts', 'agences', 'reponses', 'documents', 'visites'];
   var DEFAULTS = {
-    reglages: { prix: 162500, mode: 'seul', tauxAgence: 5, crd: null, tauxPret: null },
+    reglages: { prix: null, mode: 'seul', tauxAgence: 5, crd: null, tauxPret: null, titre: '', ville: '' },
     etapes: { items: {}, familles: {} },
     couts: { lignes: {}, perso: {} },
     agences: { fiches: {}, perso: {}, masquees: {} },
@@ -904,16 +902,30 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     visites: { liste: {} }
   };
   var S = clone(DEFAULTS);
-  var UI_KEY = 'vente-chanteloup-affichage';
-  var DRAFT_KEY = 'vente-chanteloup-brouillon';
-  var CFG_KEY = 'vente-chanteloup-connexion';
+  var UI_KEY = 'suivi-vente-affichage';
+  var DRAFT_KEY = 'suivi-vente-brouillon';
+  var CFG_KEY = 'suivi-vente-connexion';
+  /* Reprend la connexion et le brouillon enregistrés par la version précédente de la page. */
+  (function () {
+    try {
+      ['affichage', 'brouillon', 'connexion'].forEach(function (suf) {
+        var nk = 'suivi-vente-' + suf, re = new RegExp('^vente-[a-z]+-' + suf + '$');
+        for (var i = localStorage.length - 1; i >= 0; i--) {
+          var k = localStorage.key(i);
+          if (!k || !re.test(k)) continue;
+          if (localStorage.getItem(nk) == null) localStorage.setItem(nk, localStorage.getItem(k));
+          localStorage.removeItem(k);
+        }
+      });
+    } catch (e) { /* stockage indisponible */ }
+  })();
   var FILE_NAME = 'vente-donnees.json';
   var API = 'https://api.github.com';
   var file = { cfg: null, on: false, busy: false, sha: null, dirty: false, rev: 0, saving: false, again: false, timer: 0, conflict: false, error: '', savedAt: null, note: '' };
   var needFit = true;
 
   function serialize() {
-    return JSON.stringify({ application: 'vente-chanteloup', version: 1, modifie: new Date().toISOString(), donnees: S }, null, 2);
+    return JSON.stringify({ application: 'suivi-vente', version: 1, modifie: new Date().toISOString(), donnees: S }, null, 2);
   }
   function parseData(txt) {
     if (!txt || !txt.trim()) return {};
@@ -1179,15 +1191,16 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     var m = t.match(/(\d+(?:\.\d+)?)/);
     if (!m) return null;
     var n = Number(m[1]);
-    return (/%/.test(t) || n <= 20) ? Math.round(base * n / 100) : Math.round(n);
+    if (/%/.test(t) || n <= 20) return base ? Math.round(base * n / 100) : null;
+    return Math.round(n);
   }
   function renderCompare() {
     var prix = num(S.reglages.prix) || 0;
     var rows = allAgencies().map(function (a) {
       var f = fiche(a.id), est = num(f.estimation);
       if (est == null && !f.honoraires && !f.mandat) return null;
-      var base = est != null ? est : prix, fee = parseFee(f.honoraires, base);
-      return { nom: a.nom, statut: f.statut || STATUTS[0], est: est, hon: f.honoraires || '', fee: fee, net: fee != null ? base - fee : null, mandat: f.mandat || '' };
+      var base = est != null ? est : (prix || null), fee = parseFee(f.honoraires, base);
+      return { nom: a.nom, statut: f.statut || STATUTS[0], est: est, hon: f.honoraires || '', fee: fee, net: fee != null && base != null ? base - fee : null, mandat: f.mandat || '' };
     }).filter(Boolean);
     var box = $('#ag-compare'), sig = JSON.stringify([rows, prix]);
     if (box.dataset.sig === sig) return;
@@ -1242,7 +1255,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     var cmp = allAgencies().filter(function (a) { return isCmp(a.id); });
     QUESTIONS.forEach(function (g) { g.q.forEach(function (q) {
       var ans = cmp.map(function (a) { var r = ((S.reponses.r || {})[a.id] || {})[q[0]]; return r ? a.nom + ' : ' + r : ''; }).filter(Boolean);
-      if (hit(q[1]) || ans.some(function (x) { return hit(x); })) add('Question', q[1], ans.filter(function (x) { return hit(x); })[0] || g.t, { tab: 'questions', sel: '[data-q="' + q[0] + '"]' });
+      if (hit(qt(q[1])) || ans.some(function (x) { return hit(x); })) add('Question', qt(q[1]), ans.filter(function (x) { return hit(x); })[0] || g.t, { tab: 'questions', sel: '[data-q="' + q[0] + '"]' });
     }); });
     visList().forEach(function (v) {
       if (hit(v.nom, v.contact, v.source, v.retour, v.notes)) add('Visite', v.nom || 'Visiteur sans nom', v.retour || v.notes || '', { tab: 'visites', sel: '[data-vis="' + v.id + '"]' });
@@ -1606,16 +1619,25 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     return out;
   }
 
+  function agOrder(perso) {
+    return function (a, b) {
+      var oa = num(perso[a].ordre), ob = num(perso[b].ordre);
+      oa = oa == null ? 1e9 : oa; ob = ob == null ? 1e9 : ob;
+      return oa - ob || (a < b ? -1 : a > b ? 1 : 0);
+    };
+  }
   function allAgencies() {
-    var hid = S.agences.masquees || {};
-    var list = AGENCIES.filter(function (a) { return !hid[a.id]; });
-    var perso = S.agences.perso || {};
-    Object.keys(perso).sort().forEach(function (id) {
-      var p = perso[id];
-      if (!p || p.suppr || !p.nom) return;
-      list.push({ id: id, nom: p.nom, ville: p.ville || "Autre", tel: p.tel || "", site: p.site || "", custom: true });
-    });
-    return list;
+    var hid = S.agences.masquees || {}, perso = S.agences.perso || {};
+    return Object.keys(perso).filter(function (id) { var p = perso[id]; return p && !p.suppr && p.nom && !hid[id]; })
+      .sort(agOrder(perso))
+      .map(function (id) {
+        var p = perso[id];
+        return { id: id, nom: p.nom, ville: p.ville || 'Autre', tel: p.tel || '', site: p.site || '', note: p.note || '', avis: p.avis || '', info: p.info || '' };
+      });
+  }
+  function removedAgencies() {
+    var hid = S.agences.masquees || {}, perso = S.agences.perso || {};
+    return Object.keys(perso).filter(function (id) { var p = perso[id]; return p && p.nom && (p.suppr || hid[id]); });
   }
   function fiche(id) { return (S.agences.fiches && S.agences.fiches[id]) || {}; }
   function isCmp(id) { return !!fiche(id).comparer; }
@@ -1782,7 +1804,11 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     chips.replaceChildren.apply(chips, villes.map(function (v) {
       return h('button', { type: 'button', class: 'chip', 'data-ville': v, 'aria-pressed': String(v === ui.ville), text: v });
     }));
-    box.replaceChildren.apply(box, shown.map(agCard));
+    if (!list.length) {
+      box.replaceChildren(h('div', { class: 'card ag-empty' },
+        h('p', { text: "Aucune agence dans la liste. Ajoutez-en une avec le formulaire ci-dessous, ou importez une liste d'agences (fichier .json)." }),
+        h('div', null, h('button', { type: 'button', class: 'btn btn-primary', 'data-fb': 'import', text: "Importer une liste d'agences" }))));
+    } else box.replaceChildren.apply(box, shown.map(agCard));
     needFit = true;
   }
 
@@ -1798,7 +1824,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     }
     $$('button', chips).forEach(function (b) { b.setAttribute('aria-pressed', String(isCmp(b.dataset.cmp))); });
     var sel = list.filter(function (a) { return isCmp(a.id); });
-    var sig = 's:' + sel.map(function (a) { return a.id + ':' + a.nom; }).join(',');
+    var sig = 's:' + sel.map(function (a) { return a.id + ':' + a.nom; }).join(',') + '|' + (S.reglages.ville || '');
     var qa = $('#qa');
     if (qa.dataset.sig === sig) return;
     qa.dataset.sig = sig;
@@ -1810,7 +1836,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       kids.push(h('div', { class: 'qa-head' }, h('h3', { text: g.t }), sel.map(function (a) { return h('div', { class: 'qa-col', text: a.nom }); })));
       g.q.forEach(function (q) {
         kids.push(h('div', { class: 'qa-row', 'data-q': q[0] },
-          h('p', { class: 'qa-q', text: q[1] }),
+          h('p', { class: 'qa-q', text: qt(q[1]) }),
           sel.map(function (a) {
             var id = 'r-' + a.id + '-' + q[0];
             return h('div', { class: 'qa-a' },
@@ -1873,7 +1899,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     }) : [h('li', { class: 'muted', text: "Toutes les étapes sont réglées." })]);
 
     /* Coûts */
-    var R = S.reglages, prix = num(R.prix) || 0, C = computeCosts();
+    var R = S.reglages, prixSet = num(R.prix) != null, prix = num(R.prix) || 0, C = computeCosts();
     var agence = R.mode === 'agence', crd = num(R.crd), taux = num(R.tauxAgence) || 0;
     $$('[data-mode]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.mode === (agence ? 'agence' : 'seul'))); });
     $('#taux-agence').disabled = !agence;
@@ -1881,7 +1907,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       var c = C.rows[row.id], tr = $('tr[data-cost="' + row.id + '"]');
       tr.classList.toggle('off', !c.inc || c.locked);
       var est = row.unk ? 'à saisir' : rng(c.est[0], c.est[1]);
-      if (row.id === 'agence' && agence) est = pct(taux) + ' de ' + eur(prix);
+      if (row.id === 'agence' && agence) est = pct(taux) + (prixSet ? ' de ' + eur(prix) : ' du prix de vente');
       $('[data-est="' + row.id + '"]').textContent = est;
       $('[data-ret="' + row.id + '"]').textContent = c.inc ? rng(c.lo, c.hi) : 'Non compté';
       var ex = $('#ex-' + row.id);
@@ -1898,13 +1924,20 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     $('#st-couts').textContent = totalTxt;
     $('#st-couts-sub').textContent = agence ? 'Avec agence à ' + pct(taux) : 'En vendant seul';
     var netLo = prix - C.max - (crd || 0), netHi = prix - C.min - (crd || 0);
-    var netTxt = rng(netLo, netHi);
+    var netTxt = prixSet ? rng(netLo, netHi) : '—';
     $('#st-net').textContent = netTxt;
-    $('#st-net-sub').textContent = crd != null ? "Après coûts et remboursement du prêt" : "Avant remboursement du prêt (capital restant dû à saisir dans Coûts)";
-    $('#net-prix').textContent = eur(prix);
+    $('#st-net-sub').textContent = !prixSet ? "Saisissez votre prix de vente" : crd != null ? "Après coûts et remboursement du prêt" : "Avant remboursement du prêt (capital restant dû à saisir dans Coûts)";
+    $('#net-prix').textContent = prixSet ? eur(prix) : 'à saisir';
     $('#net-couts').textContent = '− ' + totalTxt;
     $('#net-crd').textContent = crd != null ? '− ' + eur(crd) : 'à saisir';
     $('#net-total').textContent = netTxt;
+
+    /* En-tête */
+    var titre = String(R.titre || '').trim(), ville = String(R.ville || '').trim();
+    setText('#hd-titre', titre || "Vente de l'appartement");
+    $('#hd-ville').textContent = ville;
+    $('#hd-ville').hidden = !ville;
+    document.title = titre || 'Suivi de vente';
 
     renderDocs();
     renderCompare();
@@ -1917,9 +1950,9 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       a.hidden = !u;
       a.setAttribute('href', u || '#');
     });
-    var nHid = AGENCIES.filter(function (a) { return (S.agences.masquees || {})[a.id]; }).length;
+    var nHid = removedAgencies().length;
     $('#ag-restore').hidden = !nHid;
-    $('#ag-restore').textContent = nHid > 1 ? 'Remettre les ' + nHid + ' agences supprimées de la liste initiale' : "Remettre l'agence supprimée de la liste initiale";
+    $('#ag-restore').textContent = nHid > 1 ? 'Remettre les ' + nHid + ' agences supprimées' : "Remettre l'agence supprimée";
 
     /* Résumé des agences */
     var list = allAgencies(), suivies = list.filter(function (a) { var s = fiche(a.id).statut; return s && s !== STATUTS[0]; });
@@ -2016,10 +2049,7 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     if (d.delcost) { patch('couts', { perso: nest([d.delcost], { suppr: true }) }, true); return; }
     if (d.delag) {
       if (d.armed) {
-        var p = { fiches: nest([d.delag], { comparer: false }) };
-        if (S.agences.perso && S.agences.perso[d.delag]) p.perso = nest([d.delag], { suppr: true });
-        else p.masquees = nest([d.delag], true);
-        patch('agences', p, true);
+        patch('agences', { perso: nest([d.delag], { suppr: true }), fiches: nest([d.delag], { comparer: false }) }, true);
       }
       else { d.armed = '1'; b.textContent = 'Confirmer la suppression'; }
       return;
@@ -2052,9 +2082,9 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
       return;
     }
     if (b.id === 'ag-restore') {
-      var back = {};
-      Object.keys(S.agences.masquees || {}).forEach(function (k) { back[k] = false; });
-      patch('agences', { masquees: back }, true);
+      var backP = {}, backM = {};
+      removedAgencies().forEach(function (k) { backP[k] = { suppr: false }; backM[k] = false; });
+      patch('agences', { perso: backP, masquees: backM }, true);
       return;
     }
   });
@@ -2076,12 +2106,33 @@ dialog#viewer::backdrop { background: rgba(8, 12, 20, 0.6); }
     e.target.value = '';
     if (!f) return;
     f.text().then(function (txt) {
+      var raw = JSON.parse(txt);
+      if (isObj(raw) && raw.application === 'suivi-vente-complement' && isObj(raw.donnees)) {
+        var c = raw.donnees, add = {}, n = 0, reg = {};
+        var src = isObj(c.agences) && isObj(c.agences.perso) ? c.agences.perso : {};
+        Object.keys(src).forEach(function (id) {
+          if (!isObj(src[id]) || !src[id].nom || (S.agences.perso || {})[id]) return;
+          add[id] = clone(src[id]); n++;
+        });
+        if (isObj(c.reglages)) ['ville', 'titre'].forEach(function (k) {
+          if (typeof c.reglages[k] === 'string' && !String(S.reglages[k] || '').trim()) reg[k] = c.reglages[k];
+        });
+        if (n) patch('agences', { perso: add }, true);
+        if (Object.keys(reg).length) patch('reglages', reg, true);
+        var m = n ? (n > 1 ? n + ' agences ajoutées.' : '1 agence ajoutée.') : 'Aucune nouvelle agence : elles sont déjà toutes dans la liste.';
+        $('#ag-msg').textContent = m; $('#gh-msg').textContent = m;
+        showForm(false); ui.ville = 'Toutes'; showTab('agences');
+        return;
+      }
       var d = parseData(txt);
       applyData(d);
       file.rev++; file.dirty = true; saveDraft();
       showForm(false);
       if (file.on && !file.conflict) writeFile(); else renderBar();
-    }).catch(function (err) { $('#gh-msg').textContent = "Import impossible : " + ((err && err.message) || 'fichier illisible') + "."; });
+    }).catch(function (err) {
+      var m = "Import impossible : " + ((err && err.message) || 'fichier illisible') + ".";
+      $('#gh-msg').textContent = m; $('#ag-msg').textContent = m;
+    });
   });
   $('#q').addEventListener('input', applySearch);
   $('#viewer').addEventListener('close', closeViewer);
