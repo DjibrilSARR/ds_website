@@ -51,6 +51,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     'use strict';
 
     const CONFIG_KEY = 'gantt_online_connection_v1';
+    const TOKEN_KEY = 'gantt_online_token_v1';
     const CACHE_PREFIX = 'gantt_online_workspace_v1:';
     const INDEX_PATH = 'profiles/index.json';
     const MAX_FILE_BYTES = 900000;
@@ -170,9 +171,12 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         return { schemaVersion: 1, profile: { id: input.profile.id, name: input.profile.name.trim() }, data: normalizeData(input.data) };
     }
     function normalizeIndex(input) {
-        requireValue(isObject(input) && input.schemaVersion === 1 && Array.isArray(input.profiles), 'Unsupported cloud profile index.');
+        requireValue(isObject(input) && [1, 2].includes(input.schemaVersion) && Array.isArray(input.profiles), 'Unsupported cloud profile index. Update the tracker on this device before syncing.');
         requireValue(input.profiles.every(validId) && new Set(input.profiles).size === input.profiles.length, 'Invalid cloud profile index IDs.');
-        return { schemaVersion: 1, profiles: input.profiles.slice() };
+        const deleted = input.deletedProfiles === undefined ? [] : input.deletedProfiles;
+        requireValue(Array.isArray(deleted) && deleted.every(validId) && new Set(deleted).size === deleted.length &&
+            deleted.every(id => !input.profiles.includes(id)) && (input.schemaVersion === 2 || !deleted.length), 'Invalid deleted profile IDs.');
+        return { schemaVersion: input.schemaVersion, profiles: input.profiles.slice(), deletedProfiles: deleted.slice() };
     }
     function makeId() {
         const bytes = new Uint8Array(16);
@@ -191,7 +195,14 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     }
     function freshState(data) {
         const profile = cachedProfile({ schemaVersion: 1, profile: { id: makeId(), name: 'Default' }, data: data || emptyData() });
-        return { schemaVersion: 1, activeProfileId: profile.id, profiles: [profile], manifestKnown: false, recovery: [] };
+        return { schemaVersion: 1, activeProfileId: profile.id, profiles: [profile], manifestKnown: false, pendingDeletions: [], recovery: [] };
+    }
+    function normalizeRecovery(entries) {
+        requireValue(Array.isArray(entries), 'Invalid recovery snapshot list.');
+        return entries.map(entry => {
+            requireValue(isObject(entry) && typeof entry.savedAt === 'string', 'Invalid recovery snapshot.');
+            return { savedAt: entry.savedAt, reason: String(entry.reason || ''), document: normalizeDocument(entry.document) };
+        });
     }
     function normalizeState(input) {
         requireValue(isObject(input) && input.schemaVersion === 1 && Array.isArray(input.profiles) && input.profiles.length, 'Invalid browser cache. Export its recovery copy before clearing it.');
@@ -211,14 +222,13 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             };
             return profile;
         });
-        requireValue(Array.isArray(input.recovery || []), 'Invalid recovery cache.');
+        const pending = input.pendingDeletions === undefined ? [] : input.pendingDeletions;
+        requireValue(Array.isArray(pending) && pending.every(validId) && new Set(pending).size === pending.length &&
+            pending.every(id => !ids.has(id)), 'Invalid pending profile deletions.');
         return {
             schemaVersion: 1, profiles, activeProfileId: ids.has(input.activeProfileId) ? input.activeProfileId : profiles[0].id,
-            manifestKnown: !!input.manifestKnown,
-            recovery: (input.recovery || []).map(entry => {
-                requireValue(isObject(entry) && typeof entry.savedAt === 'string', 'Invalid recovery snapshot.');
-                return { savedAt: entry.savedAt, reason: String(entry.reason || ''), document: normalizeDocument(entry.document) };
-            })
+            manifestKnown: !!input.manifestKnown, pendingDeletions: pending.slice(),
+            recovery: normalizeRecovery(input.recovery === undefined ? [] : input.recovery)
         };
     }
     function normalizeConfig(input) {
@@ -231,6 +241,63 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     }
     function cacheKey(config) {
         return CACHE_PREFIX + (config ? [config.owner.toLowerCase(), config.repo.toLowerCase(), config.branch].map(encodeURIComponent).join(':') : 'local');
+    }
+    function normalizeToken(token) {
+        requireValue(typeof token === 'string' && /^github_pat_[a-zA-Z0-9_]+$/.test(token.trim()), 'Enter a fine-grained GitHub PAT (github_pat_...).');
+        return token.trim();
+    }
+    class RememberedConnection {
+        constructor(storage) { this.storage = storage || window.localStorage; }
+        save(token, config) {
+            this.storage.setItem(TOKEN_KEY, JSON.stringify({ token: normalizeToken(token), config: normalizeConfig(config) }));
+        }
+        read(config) {
+            const raw = this.storage.getItem(TOKEN_KEY);
+            if (raw === null) return null;
+            let saved;
+            try { saved = JSON.parse(raw); }
+            catch (error) { throw new Error('The saved GitHub connection is unreadable. Disconnect and reconnect to replace it.'); }
+            requireValue(isObject(saved) && config && cacheKey(normalizeConfig(saved.config)) === cacheKey(config),
+                'The saved token belongs to a different repository or branch. Reconnect to save the correct connection.');
+            return normalizeToken(saved.token);
+        }
+        clear() { this.storage.removeItem(TOKEN_KEY); }
+    }
+    function normalizeBackup(input) {
+        if (input && input.kind === 'tracker-profile-backup') {
+            requireValue(input.schemaVersion === 1 && Array.isArray(input.profiles) && input.profiles.length, 'Invalid all-profiles backup.');
+            const documents = input.profiles.map(item => normalizeDocument(item));
+            return { documents, recovery: normalizeRecovery(input.recovery === undefined ? [] : input.recovery) };
+        }
+        const document = input && input.schemaVersion === 1 && input.profile ? normalizeDocument(input)
+            : { schemaVersion: 1, profile: { id: makeId(), name: 'Imported' }, data: normalizeData(input) };
+        return { documents: [document], recovery: [] };
+    }
+    function mergeData(current, incoming) {
+        const merged = normalizeData(current), imported = normalizeData(incoming), projectIds = new Map();
+        imported.projects.forEach(project => {
+            const existing = merged.projects.find(item => item.id === project.id);
+            const tasks = imported.tasks[project.id];
+            if (existing && same(existing, project) && same(merged.tasks[existing.id], tasks)) {
+                projectIds.set(project.id, existing.id); return;
+            }
+            const added = clone(project);
+            if (existing) { added.id = makeId(); added.name += ' (imported)'; }
+            projectIds.set(project.id, added.id);
+            merged.projects.push(added); merged.tasks[added.id] = clone(tasks);
+        });
+        const todoIds = new Map();
+        Object.entries(merged.todos).forEach(([date, list]) => list.forEach(item => todoIds.set(item.id, { date, item })));
+        Object.entries(imported.todos).forEach(([date, list]) => list.forEach(item => {
+            const added = clone(item);
+            if (added.projectId) added.projectId = projectIds.get(added.projectId) || null;
+            const existing = todoIds.get(added.id);
+            if (existing && existing.date === date && same(existing.item, added)) return;
+            if (existing) added.id = makeId();
+            if (!merged.todos[date]) merged.todos[date] = [];
+            merged.todos[date].push(added); todoIds.set(added.id, { date, item: added });
+        }));
+        return normalizeData(merged);
     }
     function loadLegacy(storage) {
         const v37 = storage.getItem('gantt_v37'), v36 = storage.getItem('gantt_v36');
@@ -281,8 +348,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         #token;
         constructor(config, token) {
             this.config = config ? normalizeConfig(config) : null;
-            requireValue(typeof token === 'string' && /^github_pat_[a-zA-Z0-9_]+$/.test(token.trim()), 'Enter a fine-grained GitHub PAT (github_pat_...).');
-            this.#token = token.trim(); this.cache = new Map(); this.queue = Promise.resolve(); this.lastWrite = 0;
+            this.#token = normalizeToken(token); this.cache = new Map(); this.queue = Promise.resolve(); this.lastWrite = 0;
         }
         clearToken() { this.#token = ''; this.cache.clear(); }
         request(suffix, options) {
@@ -392,6 +458,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             this.startupError = null; this.storageError = null; this.running = null; this.connecting = false;
             this.timer = null; this.pollTimer = null; this.retryAt = 0; this.failures = 0;
             this.error = null; this.paused = false; this.syncAgain = false;
+            this.validateBeforeSync = false;
             try {
                 const rawConfig = this.storage.getItem(CONFIG_KEY);
                 this.config = rawConfig ? normalizeConfig(JSON.parse(rawConfig)) : null;
@@ -408,7 +475,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         }
         current() { return this.state.profiles.find(profile => profile.id === this.state.activeProfileId); }
         isDirty(profile) { return !profile.baseValue || !same(documentFor(profile), profile.baseValue); }
-        pendingCount() { return this.state.profiles.filter(profile => this.isDirty(profile) || !profile.registered).length; }
+        pendingCount() { return this.state.profiles.filter(profile => this.isDirty(profile) || !profile.registered).length + this.state.pendingDeletions.length; }
         status() {
             const conflicts = this.state.profiles.filter(profile => profile.conflict);
             let label;
@@ -418,7 +485,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             else if (this.error) label = 'Sync error';
             else if (!this.client) label = this.config ? 'Reconnect GitHub' : 'Saved locally';
             else if (navigator.onLine === false) label = 'Offline - saved locally';
-            else if (this.running || this.connecting) label = 'Syncing...';
+            else if (this.running || this.connecting || this.validateBeforeSync) label = 'Syncing...';
             else if (this.state.profiles.some(profile => profile.remotePending)) label = 'Cloud update waiting';
             else if (this.pendingCount()) label = 'Changes pending';
             else label = 'Synced';
@@ -504,10 +571,63 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             return profile.id;
         }
         renameCurrent(name) {
+            this.renameProfile(this.state.activeProfileId, name);
+        }
+        renameProfile(id, name) {
             this.requireEditable();
-            const profile = this.current(), doc = normalizeDocument({ schemaVersion: 1, profile: { id: profile.id, name }, data: profile.data });
+            const profile = this.state.profiles.find(item => item.id === id);
+            requireValue(profile, 'Profile not found.');
+            const doc = normalizeDocument({ schemaVersion: 1, profile: { id: profile.id, name }, data: profile.data });
             profile.name = doc.profile.name; this.persist(); this.savedValues.set(profile.id, stable(doc));
             this.schedule(); this.emit();
+        }
+        saveRecovery(document, reason) {
+            this.state.recovery.push({ savedAt: new Date().toISOString(), reason, document: clone(document) });
+        }
+        removeProfile(profile, reason) {
+            this.saveRecovery(documentFor(profile), reason);
+            this.state.profiles = this.state.profiles.filter(item => item !== profile);
+            this.savedValues.delete(profile.id);
+        }
+        ensureCurrentProfile() {
+            if (!this.state.profiles.length) {
+                const profile = freshState().profiles[0];
+                this.state.profiles.push(profile); this.savedValues.set(profile.id, stable(documentFor(profile)));
+                this.syncAgain = true;
+            }
+            if (!this.state.profiles.some(profile => profile.id === this.state.activeProfileId)) this.state.activeProfileId = this.state.profiles[0].id;
+        }
+        deleteProfile(id) {
+            this.requireEditable();
+            const profile = this.state.profiles.find(item => item.id === id);
+            requireValue(profile, 'Profile not found.');
+            this.removeProfile(profile, 'Deleted profile');
+            if (this.config && !this.state.pendingDeletions.includes(id)) this.state.pendingDeletions.push(id);
+            this.ensureCurrentProfile(); this.persist();
+            this.onChange({ reason: 'deletion', id: this.state.activeProfileId }); this.emit();
+            if (this.running) this.syncAgain = true;
+            this.schedule(0);
+        }
+        applyCloudDeletions(ids) {
+            const active = this.state.activeProfileId;
+            let changed = false;
+            this.state.profiles.slice().forEach(profile => {
+                if (!ids.includes(profile.id)) return;
+                if (!this.canApplyRemote(profile.id)) { profile.remotePending = true; changed = true; return; }
+                this.removeProfile(profile, 'Profile deleted on another device; latest local copy retained');
+                changed = true;
+            });
+            if (!changed) return;
+            this.ensureCurrentProfile(); this.persist();
+            if (active !== this.state.activeProfileId) this.onChange({ reason: 'deletion', id: this.state.activeProfileId });
+            this.emit();
+        }
+        resume(token) {
+            this.requireEditable();
+            requireValue(this.config && !this.client && !this.running && !this.connecting, 'The saved connection cannot be resumed in the current state.');
+            this.client = new GitHubClient(this.config, token); this.validateBeforeSync = true;
+            this.error = null; this.paused = false; this.retryAt = 0; this.failures = 0;
+            this.emit(); this.schedule(0);
         }
         async connect(token, includeLocal) {
             this.requireEditable();
@@ -523,7 +643,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 else {
                     const remoteIndex = await client.readFile(INDEX_PATH);
                     const ids = remoteIndex ? normalizeIndex(remoteIndex.value).profiles : [];
-                    state = { schemaVersion: 1, profiles: [], activeProfileId: null, manifestKnown: !!remoteIndex, recovery: [] };
+                    state = { schemaVersion: 1, profiles: [], activeProfileId: null, manifestKnown: !!remoteIndex, pendingDeletions: [], recovery: [] };
                     for (const id of ids) {
                         const remote = await client.readFile('profiles/' + id + '.json');
                         requireValue(remote, 'The cloud index references a missing profile: ' + id + '. Restore its file from GitHub history.');
@@ -540,6 +660,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 this.storage.setItem(key, JSON.stringify(state)); this.storage.setItem(CONFIG_KEY, JSON.stringify(config));
                 if (this.client) this.client.clearToken();
                 this.client = client; this.config = config; this.key = key; this.state = state;
+                this.validateBeforeSync = false;
                 this.refreshSavedValues(); this.error = null; this.paused = false; this.retryAt = 0; this.failures = 0;
                 this.onChange({ reason: 'connection', id: state.activeProfileId });
             } catch (error) { client.clearToken(); throw error; }
@@ -581,11 +702,29 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             this.emit(); return this.running;
         }
         async performSync(client) {
+            if (this.validateBeforeSync) {
+                await client.validateAccess();
+                this.validateBeforeSync = false;
+            }
             const remoteIndex = await client.readFile(INDEX_PATH);
             requireValue(remoteIndex || !this.state.manifestKnown, 'The cloud profile index disappeared. Restore profiles/index.json from GitHub history; local data is preserved.');
-            const index = remoteIndex ? normalizeIndex(remoteIndex.value) : { schemaVersion: 1, profiles: [] };
-            requireValue(!this.state.profiles.some(profile => profile.registered && !index.profiles.includes(profile.id)), 'A profile was removed from the cloud index outside the app. Restore the index from GitHub history before syncing.');
+            const index = remoteIndex ? normalizeIndex(remoteIndex.value) : { schemaVersion: 1, profiles: [], deletedProfiles: [] };
+            const excluded = new Set(index.deletedProfiles.concat(this.state.pendingDeletions));
+            requireValue(!this.state.profiles.some(profile => profile.registered && !index.profiles.includes(profile.id) && !excluded.has(profile.id)), 'A profile was removed from the cloud index outside the app. Restore the index from GitHub history before syncing.');
+            await this.loadCloudProfiles(client, index);
+            this.applyCloudDeletions(index.deletedProfiles);
+            for (const profile of this.state.profiles.slice()) {
+                if (excluded.has(profile.id) || this.state.pendingDeletions.includes(profile.id)) continue;
+                if (this.isDirty(profile) || !profile.registered || profile.id === this.state.activeProfileId || profile.conflict) await this.syncProfile(client, profile);
+            }
+            const uploaded = this.state.profiles.filter(profile => profile.baseSha && !profile.registered && !excluded.has(profile.id)).map(profile => profile.id);
+            if (uploaded.length || this.state.pendingDeletions.length || !remoteIndex) await this.registerProfiles(client, uploaded);
+            this.state.manifestKnown = true; this.persist();
+        }
+        async loadCloudProfiles(client, index) {
+            const excluded = new Set(index.deletedProfiles.concat(this.state.pendingDeletions));
             for (const id of index.profiles) {
+                if (excluded.has(id)) continue;
                 const cached = this.state.profiles.find(profile => profile.id === id);
                 if (cached) { if (cached.baseSha) cached.registered = true; continue; }
                 const remote = await client.readFile('profiles/' + id + '.json');
@@ -594,15 +733,10 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 this.state.profiles.push(profile); this.savedValues.set(id, stable(documentFor(profile)));
                 this.persist(); this.emit();
             }
-            for (const profile of this.state.profiles.slice()) {
-                if (this.isDirty(profile) || !profile.registered || profile.id === this.state.activeProfileId || profile.conflict) await this.syncProfile(client, profile);
-            }
-            const uploaded = this.state.profiles.filter(profile => profile.baseSha && !profile.registered).map(profile => profile.id);
-            if (uploaded.length || !remoteIndex) await this.registerProfiles(client, uploaded);
-            this.state.manifestKnown = true; this.persist();
         }
         async syncProfile(client, profile) {
             const path = 'profiles/' + profile.id + '.json', remoteFile = await client.readFile(path);
+            if (!this.state.profiles.includes(profile) || this.state.pendingDeletions.includes(profile.id)) return;
             const remote = remoteFile ? normalizeDocument(remoteFile.value, profile.id) : null, local = documentFor(profile);
             if (!remote && (profile.baseSha || profile.registered)) {
                 profile.conflict = { sha: null, value: null }; this.persist(); this.emit(); return;
@@ -653,8 +787,14 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             for (let attempt = 0; attempt < 3; attempt++) {
                 const latest = await client.readFile(INDEX_PATH);
                 requireValue(latest || !this.state.manifestKnown, 'The cloud index was removed during sync. Restore it from GitHub history.');
-                const value = latest ? normalizeIndex(latest.value) : { schemaVersion: 1, profiles: [] };
-                const merged = { schemaVersion: 1, profiles: Array.from(new Set(value.profiles.concat(ids))) };
+                const value = latest ? normalizeIndex(latest.value) : { schemaVersion: 1, profiles: [], deletedProfiles: [] };
+                await this.loadCloudProfiles(client, value);
+                const deleted = Array.from(new Set(value.deletedProfiles.concat(this.state.pendingDeletions)));
+                const merged = {
+                    schemaVersion: deleted.length || value.schemaVersion === 2 ? 2 : 1,
+                    profiles: Array.from(new Set(value.profiles.concat(ids))).filter(id => !deleted.includes(id)),
+                    deletedProfiles: deleted
+                };
                 if (!latest || !same(value, merged)) {
                     try { await client.writeFile(INDEX_PATH, merged, latest ? latest.sha : null, 'Register tracker profiles'); }
                     catch (error) {
@@ -665,6 +805,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                     }
                 }
                 this.state.profiles.forEach(profile => { if (merged.profiles.includes(profile.id)) profile.registered = true; });
+                this.state.pendingDeletions = this.state.pendingDeletions.filter(id => !merged.deletedProfiles.includes(id));
+                this.applyCloudDeletions(merged.deletedProfiles);
                 this.state.manifestKnown = true; this.persist(); return;
             }
             throw new GitHubError('The profile index changed repeatedly. Local profiles are safe; registration will retry.', 503);
@@ -677,13 +819,12 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             const conflict = clone(profile.conflict);
             requireValue(conflict.value || choice === 'local', 'The cloud file was deleted. Restore the local copy or download it for recovery.');
             const local = documentFor(profile);
-            const saveRecovery = (doc, reason) => this.state.recovery.push({ savedAt: new Date().toISOString(), reason, document: clone(doc) });
             if (choice === 'local') {
-                if (conflict.value) saveRecovery(conflict.value, 'Cloud version before choosing local');
+                if (conflict.value) this.saveRecovery(conflict.value, 'Cloud version before choosing local');
                 profile.baseSha = conflict.sha; profile.baseValue = conflict.value; profile.conflict = null;
                 if (!conflict.value) profile.registered = false;
             } else {
-                saveRecovery(local, 'Local version before choosing cloud');
+                this.saveRecovery(local, 'Local version before choosing cloud');
                 if (choice === 'both') {
                     local.profile.id = makeId(); local.profile.name = local.profile.name.slice(0, 96) + ' (recovered local)';
                     this.state.profiles.push(cachedProfile(local)); this.state.activeProfileId = local.profile.id;
@@ -696,31 +837,43 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             return { schemaVersion: 1, kind: 'tracker-profile-backup', profiles: this.state.profiles.map(documentFor), recovery: clone(this.state.recovery) };
         }
         rawRecovery() { return { cacheKey: this.key, content: this.storage.getItem(this.key) }; }
-        importBackup(input, replaceCurrent) {
+        importBackup(input, options) {
             this.requireEditable();
-            if (input && input.kind === 'tracker-profile-backup') {
-                requireValue(input.schemaVersion === 1 && Array.isArray(input.profiles) && input.profiles.length, 'Invalid all-profiles backup.');
-                const documents = input.profiles.map(item => normalizeDocument(item));
-                requireValue(input.recovery === undefined || Array.isArray(input.recovery), 'Invalid backup recovery list.');
-                const recovery = (input.recovery || []).map(entry => {
-                    requireValue(isObject(entry) && typeof entry.savedAt === 'string', 'Invalid backup recovery snapshot.');
-                    return { savedAt: entry.savedAt, reason: String(entry.reason || ''), document: normalizeDocument(entry.document) };
-                });
-                documents.forEach(doc => { doc.profile.id = makeId(); this.state.profiles.push(cachedProfile(doc)); });
-                this.state.recovery.push(...recovery); this.state.activeProfileId = documents[0].profile.id;
-                this.refreshSavedValues(); this.persist();
-                this.onChange({ reason: 'import', id: this.state.activeProfileId }); this.emit(); this.schedule(); return;
+            if (typeof options === 'boolean') options = { mode: options ? 'replace' : 'new', targetId: options ? this.state.activeProfileId : undefined };
+            options = options || { mode: 'new' };
+            requireValue(['new', 'merge', 'replace'].includes(options.mode), 'Choose how to import the backup.');
+            const backup = normalizeBackup(input);
+            let documents = backup.documents;
+            if (options.sourceIndex !== undefined) {
+                requireValue(Number.isInteger(options.sourceIndex) && options.sourceIndex >= 0 && options.sourceIndex < documents.length, 'Choose a source profile from the backup.');
+                documents = [documents[options.sourceIndex]];
             }
-            const doc = input && input.schemaVersion === 1 && input.profile ? normalizeDocument(input)
-                : { schemaVersion: 1, profile: { id: makeId(), name: 'Imported' }, data: normalizeData(input) };
-            if (!replaceCurrent) { this.addProfile(doc.profile.name, doc.data); return; }
-            const profile = this.current();
-            this.state.recovery.push({ savedAt: new Date().toISOString(), reason: 'Before importing into current profile', document: documentFor(profile) });
-            profile.data = doc.data; this.saveCurrent(profile.data); this.onChange({ reason: 'import', id: profile.id });
+            if (options.mode === 'new') {
+                documents.forEach(doc => {
+                    doc.profile.id = makeId();
+                    if (documents.length === 1 && options.name !== undefined) doc.profile.name = options.name;
+                    doc.profile.name = normalizeDocument(doc).profile.name;
+                });
+                this.state.profiles.push(...documents.map(doc => cachedProfile(doc)));
+                this.state.activeProfileId = documents[0].profile.id;
+            } else {
+                requireValue(documents.length === 1, 'Select one source profile before importing into an existing profile.');
+                const profile = this.state.profiles.find(item => item.id === options.targetId);
+                requireValue(profile, 'The destination profile no longer exists.');
+                const next = options.mode === 'merge' ? mergeData(profile.data, documents[0].data) : documents[0].data;
+                if (!same(next, profile.data)) {
+                    this.saveRecovery(documentFor(profile), 'Before ' + (options.mode === 'merge' ? 'adding imported data' : 'replacing data from a backup'));
+                    profile.data = next;
+                }
+                this.state.activeProfileId = profile.id;
+            }
+            this.state.recovery.push(...backup.recovery);
+            this.refreshSavedValues(); this.persist();
+            this.onChange({ reason: 'import', id: this.state.activeProfileId }); this.emit(); this.schedule();
         }
     }
     window.TrackerOnline = {
-        Store, GitHubClient, GitHubError, normalizeData, normalizeDocument, normalizeIndex, sanitizeRichText,
+        Store, GitHubClient, GitHubError, RememberedConnection, normalizeData, normalizeDocument, normalizeIndex, normalizeBackup, sanitizeRichText,
         escapeText, emptyData, documentFor, encodeContent, decodeContent, cacheKey, same, MAX_FILE_BYTES
     };
 })();
@@ -737,6 +890,12 @@ let onlineFileError = '';
 let onlineOfflineError = '';
 let onlineWorkerRegistration = null;
 let onlineUpdating = false;
+let onlineFileChoosing = false;
+let onlineImportDraft = null;
+let onlineManagerSignature = '';
+let onlineCredentialError = '';
+
+const onlineRememberedConnection = new TrackerOnline.RememberedConnection();
 
 const onlineStore = new TrackerOnline.Store({
     onChange: applyOnlineProfile,
@@ -771,13 +930,14 @@ function persistOnlineData() {
 
 function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
-    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal']
+    if (onlineFileChoosing) return true;
+    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
         })) return true;
     const focused = document.activeElement;
-    if (focused && (focused.isContentEditable || (focused.matches('input, textarea') && focused.value))) return true;
+    if (focused && (focused.isContentEditable || (focused.matches('input:not([type="file"]), textarea') && focused.value))) return true;
     const input = document.getElementById('todo-input');
     return !!(input && input.value.trim()) || document.body.style.cursor === 'grabbing' ||
         document.body.style.cursor === 'ew-resize' || document.body.style.cursor === 'col-resize';
@@ -807,6 +967,12 @@ function applyOnlineProfile(change) {
         todoLastDay = null;
     }
     render();
+    const liveLinks = new Set(onlineStore.state.profiles.map(item => onlineLinkKey(item.id)));
+    for (const [key, entry] of onlineFileLinks) {
+        if (key.startsWith(onlineStore.key + ':') && !liveLinks.has(key)) {
+            entry.latest = null; onlineFileLinks.delete(key);
+        }
+    }
     updateOnlineLocalFileButton();
     queueOnlineLocalFile(profile.id);
     renderOnlineToolbar(onlineStore.status());
@@ -819,12 +985,14 @@ function renderOnlineToolbar(status) {
     document.body.classList.toggle('online-blocked', status.blocked);
     document.body.classList.toggle('online-save-failed', !!onlineStore.storageError);
     document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError;
-    document.getElementById('toolbar-profiles').inert = document.getElementById('tracker-shell').inert;
+    document.getElementById('toolbar-profiles').inert = document.getElementById('tracker-shell').inert || onlineFileChoosing;
     document.getElementById('toolbar-project-controls').inert = document.getElementById('tracker-shell').inert;
     ['toolbar-export-profile', 'btn-export-pdf', 'btn-export-img', 'btn-sync'].forEach(id => {
         document.getElementById(id).disabled = !onlineStore.ready || status.blocked;
     });
     document.getElementById('toolbar-import').disabled = document.getElementById('tracker-shell').inert;
+    document.getElementById('btn-sync').disabled ||= onlineStore.connecting || onlineFileChoosing;
+    document.getElementById('github-connect-button').disabled = !onlineStore.ready || status.blocked || onlineFileChoosing;
     const signature = JSON.stringify(onlineStore.state.profiles.map(profile => [profile.id, profile.name]));
     if (signature !== onlineProfileOptions) {
         select.replaceChildren(...onlineStore.state.profiles.map(profile => {
@@ -835,8 +1003,9 @@ function renderOnlineToolbar(status) {
         onlineProfileOptions = signature;
     }
     select.value = onlineStore.state.activeProfileId;
-    select.disabled = status.blocked || !onlineStore.ready;
+    select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing;
     const button = document.getElementById('online-status');
+    button.disabled = onlineFileChoosing;
     button.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
     button.className = 'px-3 py-1.5 rounded text-xs font-semibold whitespace-nowrap ' +
         (status.error || status.conflicts.length ? 'bg-amber-900 text-amber-200' :
@@ -848,18 +1017,19 @@ function renderOnlineToolbar(status) {
     const message = document.getElementById('online-message');
     const explanation = status.error ? status.error.message : status.blocked ? 'Editing is blocked. Close other tracker tabs and reload.' :
         status.conflicts.length ? 'Local and GitHub versions differ. Click Needs attention to recover your changes; editing can continue locally.' :
-        onlineFileError || onlineOfflineError;
+        onlineCredentialError || onlineFileError || onlineOfflineError;
     message.textContent = explanation || '';
     message.classList.toggle('hidden', !explanation);
     const conflict = status.conflicts.find(profile => profile.id === onlineStore.state.activeProfileId) || status.conflicts[0];
     if (conflict && !onlineUiBusy() && !onlineShownConflicts.has(conflict.id + ':' + conflict.conflict.sha)) {
         openOnlineConflict(conflict.id);
     }
+    renderOnlineProfileManager();
 }
 
-function onlineAllowProfileChange() {
+function onlineAllowProfileChange(action) {
     if (!onlineUiBusy()) return true;
-    return confirm('There may be unsaved text in an editor or the add-item box. Discard that text and switch profiles? Saved changes will stay in their current profile.');
+    return confirm('There may be unsaved text in an editor or the add-item box. Discard that text and ' + (action || 'switch profiles') + '? Saved changes will stay in their current profile.');
 }
 
 function switchOnlineProfile(id) {
@@ -880,6 +1050,97 @@ function renameOnlineProfile() {
     try { onlineStore.renameCurrent(name); } catch (error) { showOnlineError(error); }
 }
 
+function onlineProfileSummary(profile) {
+    const tasks = Object.values(profile.data.tasks).reduce((total, list) => total + list.length, 0);
+    const todos = Object.values(profile.data.todos).reduce((total, list) => total + list.length, 0);
+    return profile.data.projects.length + ' projects, ' + tasks + ' tasks, ' + todos + ' To Dos';
+}
+
+function openOnlineProfileManager() {
+    if (!onlineAllowProfileChange('manage profiles')) return;
+    document.getElementById('profile-manager-error').classList.add('hidden');
+    document.getElementById('profile-new-name').value = '';
+    document.getElementById('profile-manager-modal').classList.remove('hidden');
+    renderOnlineProfileManager(true);
+    document.getElementById('profile-new-name').focus();
+}
+
+function closeOnlineProfileManager() {
+    document.getElementById('profile-manager-modal').classList.add('hidden');
+    document.getElementById('profiles-manage-button').focus();
+}
+
+function showOnlineProfileError(error) {
+    const box = document.getElementById('profile-manager-error');
+    box.textContent = error.message; box.classList.remove('hidden');
+    console.error('Profile management:', error.message);
+}
+
+function renderOnlineProfileManager(force) {
+    const modal = document.getElementById('profile-manager-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    const signature = JSON.stringify(onlineStore.state.profiles.map(profile =>
+        [profile.id, profile.name, onlineProfileSummary(profile), profile.id === onlineStore.state.activeProfileId]));
+    if (!force && signature === onlineManagerSignature) return;
+    onlineManagerSignature = signature;
+    const rows = onlineStore.state.profiles.map(profile => {
+        const row = document.createElement('div');
+        row.className = 'profile-manager-row bg-gray-900 border border-gray-700 rounded p-3';
+        const information = document.createElement('div'); information.style.flex = '1'; information.style.minWidth = '140px';
+        const title = document.createElement('strong'); title.textContent = profile.name; title.style.overflowWrap = 'anywhere';
+        const detail = document.createElement('div'); detail.className = 'text-xs text-gray-400'; detail.textContent = onlineProfileSummary(profile);
+        information.append(title, detail); row.appendChild(information);
+        const actions = document.createElement('div'); actions.className = 'flex flex-wrap gap-2';
+        const action = (label, run) => {
+            const button = document.createElement('button'); button.type = 'button';
+            button.className = 'px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs';
+            button.textContent = label; button.onclick = run; actions.appendChild(button); return button;
+        };
+        const use = action(profile.id === onlineStore.state.activeProfileId ? 'Active' : 'Use', () => {
+            try { onlineStore.setActive(profile.id); closeOnlineProfileManager(); } catch (error) { showOnlineProfileError(error); }
+        });
+        use.disabled = profile.id === onlineStore.state.activeProfileId;
+        action('Rename', () => {
+            const name = prompt('Profile name:', profile.name);
+            if (name === null) return;
+            try {
+                onlineStore.renameProfile(profile.id, name);
+                queueOnlineLocalFile(profile.id);
+            } catch (error) { showOnlineProfileError(error); }
+        });
+        const remove = action('Delete', () => deleteOnlineProfile(profile.id));
+        remove.classList.add('profile-delete');
+        row.appendChild(actions); return row;
+    });
+    document.getElementById('profile-manager-list').replaceChildren(...rows);
+}
+
+function addManagedOnlineProfile(event) {
+    event.preventDefault();
+    try {
+        onlineStore.addProfile(document.getElementById('profile-new-name').value);
+        document.getElementById('profile-new-name').value = '';
+        document.getElementById('profile-manager-error').classList.add('hidden');
+    } catch (error) { showOnlineProfileError(error); }
+}
+
+async function deleteOnlineProfile(id) {
+    const profile = onlineStore.state.profiles.find(item => item.id === id);
+    if (!profile) { showOnlineProfileError(new Error('The profile no longer exists.')); return; }
+    if (!confirm('Delete "' + profile.name + '" from this workspace' + (onlineStore.config ? ' and all synced devices' : '') +
+        '? A recovery snapshot is kept. Its local JSON file is not deleted. Deleting the last profile creates an empty Default profile.')) return;
+    try {
+        const key = onlineLinkKey(id), link = onlineFileLinks.get(key);
+        if (link) {
+            link.latest = null;
+            if (link.pending) await link.pending;
+            onlineFileLinks.delete(key);
+        }
+        onlineStore.deleteProfile(id);
+        document.getElementById('profile-manager-error').classList.add('hidden');
+    } catch (error) { showOnlineProfileError(error); }
+}
+
 function openOnlineStatus() {
     const conflicts = onlineStore.status().conflicts;
     if (conflicts.length) openOnlineConflict(conflicts.find(profile => profile.id === onlineStore.state.activeProfileId)?.id || conflicts[0].id);
@@ -892,7 +1153,7 @@ function openGitHubModal() {
         alert(onlineStore.status().error?.message || 'The browser workspace is still starting. Please wait.');
         return;
     }
-    if (location.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+    if (location.protocol !== 'file:' && !isSecureContext) {
         showOnlineError(new Error('Open the HTTPS version of this website before entering a GitHub token.'));
         return;
     }
@@ -900,7 +1161,10 @@ function openGitHubModal() {
     document.getElementById('github-include-local').checked = !onlineStore.config && onlineStore.state.profiles.some(profile =>
         profile.data.projects.length || Object.values(profile.data.todos).some(list => list.length));
     document.getElementById('github-modal-error').classList.add('hidden');
-    document.getElementById('github-disconnect').classList.toggle('hidden', !onlineStore.client);
+    document.getElementById('github-disconnect').classList.toggle('hidden', !onlineStore.client && !onlineStore.config);
+    document.getElementById('github-connection-description').textContent = onlineStore.client
+        ? 'Connected to ' + onlineStore.config.owner + '/' + onlineStore.config.repo + '. Enter a replacement token below, or disconnect.'
+        : 'Paste your token. Your private repository is detected automatically.';
     document.getElementById('github-modal').classList.remove('hidden');
     document.getElementById('github-token').focus();
 }
@@ -924,6 +1188,9 @@ async function connectOnlineGitHub(event) {
     submit.textContent = 'Connecting...';
     try {
         await onlineStore.connect(token, document.getElementById('github-include-local').checked);
+        try { onlineRememberedConnection.save(token, onlineStore.config); }
+        catch (error) { throw new Error('Connected, but this browser could not remember the token. Check its storage settings and reconnect.'); }
+        onlineCredentialError = '';
         closeGitHubModal();
     } catch (error) {
         console.error('GitHub connection:', error.message);
@@ -934,7 +1201,15 @@ async function connectOnlineGitHub(event) {
 async function disconnectOnlineGitHub() {
     const fields = document.getElementById('github-fields');
     fields.disabled = true;
-    try { await onlineStore.disconnect(); closeGitHubModal(); }
+    try {
+        try { onlineRememberedConnection.clear(); onlineCredentialError = ''; }
+        catch (error) {
+            onlineCredentialError = 'Disconnected, but the browser could not remove its saved token. Check its storage permissions before reopening the tracker.';
+            throw new Error(onlineCredentialError);
+        }
+        finally { await onlineStore.disconnect(); }
+        closeGitHubModal();
+    }
     catch (error) { showOnlineError(error); }
     finally { fields.disabled = false; }
 }
@@ -960,13 +1235,79 @@ async function importOnlineFile(event) {
     const file = event.target.files[0];
     if (!file) return;
     try {
-        const input = JSON.parse(await file.text());
-        const all = input.kind === 'tracker-profile-backup';
-        if (!confirm(all ? 'Import all profiles as NEW profiles? Existing work will not be replaced.' :
-            'Import this backup as a NEW profile? Your current profile will not be replaced.')) return;
-        onlineStore.importBackup(input, false);
+        const backup = TrackerOnline.normalizeBackup(JSON.parse(await file.text()));
+        if (!onlineAllowProfileChange('import data')) return;
+        onlineImportDraft = backup;
+        document.getElementById('profile-import-filename').textContent = file.name;
+        const source = document.getElementById('profile-import-source');
+        source.replaceChildren(...backup.documents.map((doc, index) => {
+            const repeated = backup.documents.some((other, position) => position !== index && other.profile.id === doc.profile.id);
+            const option = document.createElement('option'); option.value = String(index);
+            option.textContent = doc.profile.name + (repeated ? ' (version ' + (index + 1) + ')' : '');
+            return option;
+        }));
+        if (backup.documents.length > 1) {
+            const all = document.createElement('option'); all.value = 'all'; all.textContent = 'All profiles (keep them separate)';
+            source.prepend(all); source.value = 'all';
+        }
+        const target = document.getElementById('profile-import-target');
+        const create = document.createElement('option'); create.value = 'new'; create.textContent = 'Create new profile';
+        target.replaceChildren(create, ...onlineStore.state.profiles.map(profile => {
+            const option = document.createElement('option'); option.value = profile.id; option.textContent = profile.name; return option;
+        }));
+        document.getElementById('profile-import-mode').value = 'merge';
+        document.getElementById('profile-import-error').classList.add('hidden');
+        updateOnlineImportOptions();
+        document.getElementById('profile-import-modal').classList.remove('hidden');
     } catch (error) { alert('Import failed: ' + error.message); console.error('Tracker import:', error.message); }
     finally { event.target.value = ''; }
+}
+
+function updateOnlineImportOptions() {
+    if (!onlineImportDraft) return;
+    const source = document.getElementById('profile-import-source');
+    const target = document.getElementById('profile-import-target');
+    const all = source.value === 'all';
+    if (all) target.value = 'new';
+    target.disabled = all;
+    const creating = target.value === 'new';
+    document.getElementById('profile-import-mode-row').classList.toggle('hidden', creating);
+    document.getElementById('profile-import-name-row').classList.toggle('hidden', !creating || all);
+    if (!all) document.getElementById('profile-import-name').value = onlineImportDraft.documents[Number(source.value)].profile.name;
+    document.getElementById('profile-import-description').textContent = creating
+        ? 'New profiles are separate from existing work. No current data is replaced.'
+        : document.getElementById('profile-import-mode').value === 'replace'
+            ? 'Replaces projects, tasks, To Dos and settings in the selected destination. A recovery snapshot is kept first; its name and identity stay the same.'
+            : 'Adds projects and To Dos without overwriting existing items or settings. Conflicting IDs are imported as copies. A recovery snapshot is kept first.';
+}
+
+function closeOnlineImport() {
+    onlineImportDraft = null;
+    document.getElementById('profile-import-modal').classList.add('hidden');
+}
+
+function applyOnlineImport(event) {
+    event.preventDefault();
+    if (!onlineImportDraft) return;
+    const source = document.getElementById('profile-import-source').value;
+    const target = document.getElementById('profile-import-target').value;
+    const mode = target === 'new' ? 'new' : document.getElementById('profile-import-mode').value;
+    const destination = onlineStore.state.profiles.find(profile => profile.id === target);
+    if (mode === 'replace' && destination && !confirm('Replace the content of "' + destination.name + '" with this backup? Its current content is retained in Recovery.')) return;
+    try {
+        onlineStore.importBackup({
+            schemaVersion: 1, kind: 'tracker-profile-backup',
+            profiles: onlineImportDraft.documents, recovery: onlineImportDraft.recovery
+        }, {
+            mode, targetId: target === 'new' ? undefined : target,
+            sourceIndex: source === 'all' ? undefined : Number(source),
+            name: source === 'all' ? undefined : document.getElementById('profile-import-name').value
+        });
+        closeOnlineImport();
+    } catch (error) {
+        const box = document.getElementById('profile-import-error'); box.textContent = error.message; box.classList.remove('hidden');
+        console.error('Tracker import:', error.message);
+    }
 }
 
 function openOnlineConflict(id) {
@@ -1041,7 +1382,12 @@ function updateOnlineLocalFileButton() {
 }
 
 async function toggleOnlineLocalFile() {
+    if (onlineFileChoosing || onlineStore.connecting) {
+        showOnlineError(new Error('Finish choosing the current file or connecting GitHub before changing the local-file link.'));
+        return;
+    }
     const profile = onlineStore.current(), key = onlineLinkKey(profile.id);
+    const workspace = onlineStore.key;
     const existing = onlineFileLinks.get(key);
     if (existing) {
         existing.latest = null;
@@ -1049,11 +1395,15 @@ async function toggleOnlineLocalFile() {
         onlineFileLinks.delete(key); updateOnlineLocalFileButton(); return;
     }
     if (!window.showSaveFilePicker) { alert('Linked local-file writing requires Chrome or Edge. JSON backup downloads still work in other browsers.'); return; }
+    onlineFileChoosing = true; renderOnlineToolbar(onlineStore.status());
     try {
         const handle = await window.showSaveFilePicker({
             suggestedName: onlineFileName(profile.name) + '_live.json',
             types: [{ description: 'Tracker profile JSON', accept: { 'application/json': ['.json'] } }]
         });
+        if (onlineStore.key !== workspace || !onlineStore.state.profiles.some(item => item.id === profile.id)) {
+            throw new Error('The workspace changed while choosing a file. Choose the profile again and re-link its JSON file.');
+        }
         for (const [otherKey, entry] of onlineFileLinks) {
             if (otherKey !== key && await handle.isSameEntry(entry.handle)) throw new Error('That file is already linked to another profile. Choose a separate JSON file so their data stays separate.');
         }
@@ -1061,6 +1411,9 @@ async function toggleOnlineLocalFile() {
         onlineFileError = ''; updateOnlineLocalFileButton(); await queueOnlineLocalFile(profile.id);
     } catch (error) {
         if (error.name !== 'AbortError') { onlineFileError = 'Local-file link failed: ' + error.message; showOnlineError(new Error(onlineFileError)); }
+    } finally {
+        onlineFileChoosing = false; renderOnlineToolbar(onlineStore.status());
+        if (onlineStore.state.profiles.some(item => item.remotePending)) onlineStore.schedule(0);
     }
 }
 
@@ -1126,7 +1479,7 @@ async function registerOnlineOfflineCache() {
 
 function applyOnlineUpdate() {
     if (!onlineWorkerRegistration?.waiting) return;
-    if (onlineStore.config && onlineStore.pendingCount() && !confirm('Some edits are not synced yet. They remain in the browser cache, but you must reconnect after reloading. Update now?')) return;
+    if (onlineStore.config && onlineStore.pendingCount() && !confirm('Some edits are not synced yet. They remain in the browser cache and will resume syncing with the remembered connection after the update. Update now?')) return;
     try {
         onlineStore.persist(); onlineUpdating = true;
         onlineWorkerRegistration.waiting.postMessage({ type: 'ACTIVATE_UPDATE' });
@@ -1143,6 +1496,10 @@ async function startOnlineTracker() {
         if (event.key === 'Escape' && backups.open) {
             backups.open = false; backups.querySelector('summary').focus();
         }
+        if (event.key === 'Escape') {
+            if (!document.getElementById('profile-import-modal').classList.contains('hidden')) closeOnlineImport();
+            else if (!document.getElementById('profile-manager-modal').classList.contains('hidden')) closeOnlineProfileManager();
+        }
     });
     try {
         await onlineStore.start();
@@ -1150,7 +1507,18 @@ async function startOnlineTracker() {
         if (onlineStore.ready && !onlineStore.blocked) {
             checkReminders();
             registerOnlineOfflineCache();
-            if (onlineStore.config) openGitHubModal();
+            if (onlineStore.config) {
+                try {
+                    if (location.protocol !== 'file:' && !isSecureContext) throw new Error('Open the HTTPS version before resuming the saved GitHub connection.');
+                    let token = onlineRememberedConnection.read(onlineStore.config);
+                    if (token) { onlineStore.resume(token); token = ''; }
+                    else openGitHubModal();
+                } catch (error) {
+                    onlineCredentialError = 'The saved GitHub connection could not be restored: ' + error.message;
+                    console.error('Saved GitHub connection:', error.message);
+                    renderOnlineToolbar(onlineStore.status()); openGitHubModal();
+                }
+            }
         }
     } catch (error) { showOnlineError(error); }
     window.addEventListener('beforeunload', event => {
@@ -1215,6 +1583,8 @@ async function startOnlineTracker() {
         body.online-blocked #tracker-shell,
         body.online-save-failed #tracker-shell { pointer-events: none; opacity: 0.5; }
         .online-modal { max-height: 90vh; overflow-y: auto; }
+        .profile-manager-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+        .profile-delete { color: #fca5a5; }
         #app-toolbar {
             min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
             padding: 8px 16px; flex-shrink: 0; background: #1f2937; border-bottom: 1px solid #374151;
@@ -1250,11 +1620,8 @@ async function startOnlineTracker() {
         <div id="toolbar-profiles" inert>
             <h1 class="toolbar-brand text-white">Project Tracker</h1>
             <select id="profile-select" onchange="switchOnlineProfile(this.value)" class="bg-gray-900 text-white border border-gray-600 rounded px-2 py-1.5 text-xs font-semibold" aria-label="Active profile"></select>
-            <button onclick="createOnlineProfile()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 rounded text-gray-200" title="New profile" aria-label="New profile">
-                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
-            </button>
-            <button onclick="renameOnlineProfile()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 rounded text-gray-200" title="Rename profile" aria-label="Rename profile">
-                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+            <button id="profiles-manage-button" onclick="openOnlineProfileManager()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 rounded text-gray-200" title="Manage profiles" aria-label="Manage profiles">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 21v-2a6 6 0 0 1 12 0v2M19 8v6M16 11h6"></path></svg>
             </button>
         </div>
         <div id="toolbar-project-controls" style="display:none;" inert>
@@ -1485,13 +1852,15 @@ async function startOnlineTracker() {
                 <ol class="list-decimal list-inside mb-4 pl-4">
                     <li>Click "Local file" in the main header.</li>
                     <li>Your browser will prompt you to create or link a file (e.g., <b>My_Tracker_Live.json</b>).</li>
-                    <li>Once enabled, the button turns green. Every change you make in the app is silently synchronized to that file in real-time.</li>
+                    <li>Once enabled, the button turns green. Every change you make in this profile is written to that file. GitHub synchronization remains independent; local-file failures are shown without disconnecting GitHub.</li>
                 </ol>
                 <h3 class="text-lg font-bold text-white mb-2">C. Manual Backups (Import / Export)</h3>
                 <ul>
-                    <li><b>Export Backup:</b> Click "Export Backup" to download your complete workspace data as a standalone JSON file.</li>
-                    <li><b>Import Backup:</b> Click "Import Backup" to upload a previously saved JSON file to restore your workspace on any device.</li>
+                    <li><b>Export Backup:</b> Use <b>Backups &gt; Export Backup</b> for the active profile, or <b>Backup all profiles</b> for every profile and its recovery snapshots.</li>
+                    <li><b>Import Backup:</b> Select the source and destination profile. Import as a new profile, add to existing content, or explicitly replace it. Existing destinations are backed up to Recovery first.</li>
                 </ul>
+                <p class="mt-4 mb-2"><b>Manage profiles:</b> The people icon beside the profile selector opens Add, Use, Rename and Delete. Deletion syncs to all devices and retains a recovery copy; it does not erase local JSON files. Deleting the last profile creates an empty Default profile.</p>
+                <p class="mb-4"><b>GitHub connection:</b> Your token is remembered in this browser until Disconnect, so reopening restores synchronization. It is never included in data backups. Use a trusted browser because scripts on the same website can access its stored token.</p>
                 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">5. Exporting Assets</h2>
                 <p class="mb-2">Generate instant stakeholder reports from the top-right header toolbar:</p>
@@ -1580,7 +1949,7 @@ async function startOnlineTracker() {
     <div id="github-modal" class="hidden fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4">
         <form onsubmit="connectOnlineGitHub(event)" class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6">
             <h2 class="text-xl font-bold mb-2">Connect GitHub</h2>
-            <p class="text-sm text-gray-400 mb-5">Paste your token. Your private repository is detected automatically.</p>
+            <p id="github-connection-description" class="text-sm text-gray-400 mb-5">Paste your token. Your private repository is detected automatically.</p>
             <fieldset id="github-fields" class="flex flex-col gap-4">
                 <label class="text-xs text-gray-300 font-semibold">GitHub token
                     <input id="github-token" type="password" required autocomplete="off" spellcheck="false" placeholder="github_pat_..." class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white">
@@ -1589,7 +1958,7 @@ async function startOnlineTracker() {
                     <input id="github-include-local" type="checkbox" class="mt-0.5">
                     <span>Also bring this browser's local profiles on first connection. Existing GitHub profiles are kept.</span>
                 </label>
-                <p class="text-xs text-gray-400">Use a fine-grained token with <b>Contents: read and write</b> for just your private data repository. The token is not saved; re-enter it after reopening.</p>
+                <p class="text-xs text-gray-400">Use a fine-grained token with <b>Contents: read and write</b> for just your private data repository. It is remembered in this browser until you disconnect, never included in profile files or backups. Use a trusted browser: scripts on this website can access its stored token.</p>
                 <div id="github-modal-error" class="hidden text-sm text-red-300" role="alert"></div>
                 <div class="flex justify-end gap-2 mt-2">
                     <button id="github-disconnect" type="button" onclick="disconnectOnlineGitHub()" class="hidden mr-auto px-3 py-2 bg-gray-700 rounded text-sm">Disconnect</button>
@@ -1597,6 +1966,48 @@ async function startOnlineTracker() {
                     <button id="github-submit" type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-semibold">Connect &amp; sync</button>
                 </div>
             </fieldset>
+        </form>
+    </div>
+    <div id="profile-manager-modal" class="hidden fixed inset-0 bg-black/70 z-[90] flex items-center justify-center p-4">
+        <div class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6" role="dialog" aria-modal="true" aria-labelledby="profile-manager-title">
+            <h2 id="profile-manager-title" class="text-xl font-bold mb-2">Manage profiles</h2>
+            <p class="text-xs text-gray-400 mb-4">Profiles have separate projects, tasks, To Dos and settings. Changes sync automatically. Deleted profiles are removed from the workspace on all devices; recovery copies are retained.</p>
+            <form onsubmit="addManagedOnlineProfile(event)" class="flex gap-2 mb-4">
+                <input id="profile-new-name" type="text" required maxlength="120" placeholder="New profile name" aria-label="New profile name" autocomplete="off" class="bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white" style="flex:1;min-width:0;">
+                <button type="submit" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm">Add profile</button>
+            </form>
+            <div id="profile-manager-error" class="hidden text-sm text-red-300 mb-4" role="alert"></div>
+            <div id="profile-manager-list" class="flex flex-col gap-2"></div>
+            <button onclick="closeOnlineProfileManager()" class="mt-4 px-3 py-2 bg-gray-700 rounded text-sm">Close</button>
+        </div>
+    </div>
+    <div id="profile-import-modal" class="hidden fixed inset-0 bg-black/70 z-[90] flex items-center justify-center p-4">
+        <form onsubmit="applyOnlineImport(event)" class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6" role="dialog" aria-modal="true" aria-labelledby="profile-import-title">
+            <h2 id="profile-import-title" class="text-xl font-bold mb-2">Import backup</h2>
+            <p id="profile-import-filename" class="text-xs text-gray-400 mb-4" style="overflow-wrap:anywhere;"></p>
+            <div class="flex flex-col gap-4">
+                <label class="text-xs text-gray-300 font-semibold">Profile in the backup
+                    <select id="profile-import-source" onchange="updateOnlineImportOptions()" class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white"></select>
+                </label>
+                <label class="text-xs text-gray-300 font-semibold">Destination profile
+                    <select id="profile-import-target" onchange="updateOnlineImportOptions()" class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white"></select>
+                </label>
+                <label id="profile-import-name-row" class="text-xs text-gray-300 font-semibold">New profile name
+                    <input id="profile-import-name" type="text" maxlength="120" class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white">
+                </label>
+                <label id="profile-import-mode-row" class="text-xs text-gray-300 font-semibold">Import mode
+                    <select id="profile-import-mode" onchange="updateOnlineImportOptions()" class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white">
+                        <option value="merge">Add to existing content</option>
+                        <option value="replace">Replace existing content</option>
+                    </select>
+                </label>
+                <p id="profile-import-description" class="text-xs text-gray-400"></p>
+                <div id="profile-import-error" class="hidden text-sm text-red-300" role="alert"></div>
+                <div class="flex justify-end gap-2">
+                    <button type="button" onclick="closeOnlineImport()" class="px-3 py-2 bg-gray-700 rounded text-sm">Cancel</button>
+                    <button type="submit" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm">Import</button>
+                </div>
+            </div>
         </form>
     </div>
     <div id="cloud-conflict-modal" class="hidden fixed inset-0 bg-black/70 z-[90] flex items-center justify-center p-4">
