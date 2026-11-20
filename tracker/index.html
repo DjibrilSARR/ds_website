@@ -888,12 +888,14 @@ let onlineConflictId = null;
 let onlineProfileOptions = '';
 let onlineFileError = '';
 let onlineOfflineError = '';
+let onlineCacheStatusError = '';
 let onlineWorkerRegistration = null;
 let onlineUpdating = false;
 let onlineFileChoosing = false;
 let onlineImportDraft = null;
 let onlineManagerSignature = '';
 let onlineCredentialError = '';
+let onlineExporting = false;
 
 const onlineRememberedConnection = new TrackerOnline.RememberedConnection();
 
@@ -930,7 +932,7 @@ function persistOnlineData() {
 
 function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
-    if (onlineFileChoosing) return true;
+    if (onlineFileChoosing || onlineExporting) return true;
     if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal']
         .some(name => {
             const modal = document.getElementById(name);
@@ -984,15 +986,15 @@ function renderOnlineToolbar(status) {
     document.body.classList.toggle('online-starting', !onlineStore.ready && !status.blocked);
     document.body.classList.toggle('online-blocked', status.blocked);
     document.body.classList.toggle('online-save-failed', !!onlineStore.storageError);
-    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError;
+    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError || onlineExporting;
     document.getElementById('toolbar-profiles').inert = document.getElementById('tracker-shell').inert || onlineFileChoosing;
     document.getElementById('toolbar-project-controls').inert = document.getElementById('tracker-shell').inert;
     ['toolbar-export-profile', 'btn-export-pdf', 'btn-export-img', 'btn-sync'].forEach(id => {
-        document.getElementById(id).disabled = !onlineStore.ready || status.blocked;
+        document.getElementById(id).disabled = !onlineStore.ready || status.blocked || onlineExporting;
     });
     document.getElementById('toolbar-import').disabled = document.getElementById('tracker-shell').inert;
     document.getElementById('btn-sync').disabled ||= onlineStore.connecting || onlineFileChoosing;
-    document.getElementById('github-connect-button').disabled = !onlineStore.ready || status.blocked || onlineFileChoosing;
+    document.getElementById('github-connect-button').disabled = !onlineStore.ready || status.blocked || onlineFileChoosing || onlineExporting;
     const signature = JSON.stringify(onlineStore.state.profiles.map(profile => [profile.id, profile.name]));
     if (signature !== onlineProfileOptions) {
         select.replaceChildren(...onlineStore.state.profiles.map(profile => {
@@ -1003,21 +1005,32 @@ function renderOnlineToolbar(status) {
         onlineProfileOptions = signature;
     }
     select.value = onlineStore.state.activeProfileId;
-    select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing;
-    const button = document.getElementById('online-status');
-    button.disabled = onlineFileChoosing;
-    button.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
-    button.className = 'px-3 py-1.5 rounded text-xs font-semibold whitespace-nowrap ' +
+    select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing || onlineExporting;
+    const actionable = status.blocked || status.conflicts.length > 0;
+    let badge = document.getElementById('online-status');
+    if (badge.tagName !== (actionable ? 'BUTTON' : 'SPAN')) {
+        const focused = document.activeElement === badge;
+        const replacement = document.createElement(actionable ? 'button' : 'span');
+        replacement.id = 'online-status'; replacement.setAttribute('aria-live', 'polite');
+        if (actionable) { replacement.type = 'button'; replacement.onclick = openOnlineStatus; }
+        else replacement.setAttribute('role', 'status');
+        badge.replaceWith(replacement); badge = replacement;
+        if (focused) document.getElementById('github-connect-button').focus();
+    }
+    if (actionable) badge.disabled = onlineFileChoosing;
+    badge.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
+    badge.className = 'px-3 py-1.5 rounded text-xs font-semibold whitespace-nowrap ' +
         (status.error || status.conflicts.length ? 'bg-amber-900 text-amber-200' :
             status.label === 'Synced' ? 'bg-green-900 text-green-300' : 'bg-gray-900 text-gray-300');
-    button.title = status.config ? status.config.owner + '/' + status.config.repo + ' - ' + status.config.branch : 'Local browser workspace';
+    badge.title = actionable ? 'Click to review the issue.' : 'Save status' +
+        (status.config ? ': ' + status.config.owner + '/' + status.config.repo + ' - ' + status.config.branch : ': local browser workspace');
     document.getElementById('github-connect-button').textContent = status.connected ? 'GitHub settings' : 'Connect GitHub';
     document.getElementById('online-retry').classList.toggle('hidden', !status.error || !status.connected || status.blocked);
     document.getElementById('online-recovery-button').classList.toggle('hidden', onlineStore.state.recovery.length === 0);
     const message = document.getElementById('online-message');
     const explanation = status.error ? status.error.message : status.blocked ? 'Editing is blocked. Close other tracker tabs and reload.' :
-        status.conflicts.length ? 'Local and GitHub versions differ. Click Needs attention to recover your changes; editing can continue locally.' :
-        onlineCredentialError || onlineFileError || onlineOfflineError;
+        status.conflicts.length ? 'This device and GitHub have different changes. Your work is preserved. Click Needs attention to choose which version to keep.' :
+        onlineCredentialError || onlineFileError || onlineOfflineError || onlineCacheStatusError;
     message.textContent = explanation || '';
     message.classList.toggle('hidden', !explanation);
     const conflict = status.conflicts.find(profile => profile.id === onlineStore.state.activeProfileId) || status.conflicts[0];
@@ -1028,6 +1041,7 @@ function renderOnlineToolbar(status) {
 }
 
 function onlineAllowProfileChange(action) {
+    if (onlineExporting) { showOnlineError(new Error('Wait for the export to finish before changing profiles.')); return false; }
     if (!onlineUiBusy()) return true;
     return confirm('There may be unsaved text in an editor or the add-item box. Discard that text and ' + (action || 'switch profiles') + '? Saved changes will stay in their current profile.');
 }
@@ -1316,7 +1330,7 @@ function openOnlineConflict(id) {
     onlineConflictId = id;
     onlineShownConflicts.add(id + ':' + profile.conflict.sha);
     document.getElementById('cloud-conflict-description').textContent = profile.conflict.value
-        ? '"' + profile.name + '" has local edits and newer GitHub changes. Keep both creates a separate recovered-local profile.'
+        ? '"' + profile.name + '": this device and GitHub both have changes. Your work has been preserved. Choose which version to keep.'
         : '"' + profile.name + '" is missing on GitHub. Restore the local version to recreate the private file.';
     const summary = value => {
         if (!value) return 'File missing';
@@ -1324,7 +1338,7 @@ function openOnlineConflict(id) {
         const todos = Object.values(value.data.todos).reduce((total, list) => total + list.length, 0);
         return value.profile.name + '\n' + value.data.projects.length + ' projects, ' + tasks + ' tasks, ' + todos + ' To Do items';
     };
-    document.getElementById('cloud-conflict-summary').textContent = 'LOCAL\n' + summary(TrackerOnline.documentFor(profile)) +
+    document.getElementById('cloud-conflict-summary').textContent = 'THIS DEVICE\n' + summary(TrackerOnline.documentFor(profile)) +
         '\n\nGITHUB\n' + summary(profile.conflict.value);
     document.getElementById('conflict-both').disabled = !profile.conflict.value;
     document.getElementById('conflict-remote').disabled = !profile.conflict.value;
@@ -1337,7 +1351,7 @@ function closeOnlineConflict() {
 }
 
 function resolveOnlineConflict(choice) {
-    if (choice === 'local' && !confirm('Use the current local version to replace the GitHub version? The previous cloud snapshot is retained locally in Recovery.')) return;
+    if (choice === 'local' && !confirm("Keep this device's version and upload it to GitHub? The replaced GitHub version will be retained in Recovery on this browser.")) return;
     const id = onlineConflictId;
     closeOnlineConflict();
     try { onlineStore.resolveConflict(id, choice); } catch (error) { showOnlineError(error); }
@@ -1375,10 +1389,36 @@ function onlineLinkKey(id) { return onlineStore.key + ':' + id; }
 function updateOnlineLocalFileButton() {
     const button = document.getElementById('btn-sync');
     if (!button) return;
-    const linked = onlineFileLinks.has(onlineLinkKey(onlineStore.current().id));
-    button.textContent = linked ? 'Local file: ON' : 'Local file';
-    button.title = linked ? 'Auto-writing this profile to its linked JSON file. Click to unlink.' : 'Link a separate local JSON file for this profile (Chrome / Edge).';
-    button.className = 'px-3 py-1.5 rounded text-xs font-semibold ' + (linked ? 'bg-green-700 hover:bg-green-600' : 'bg-indigo-600 hover:bg-indigo-500');
+    const entry = onlineFileLinks.get(onlineLinkKey(onlineStore.current().id));
+    const label = document.createElement('span');
+    label.textContent = 'Auto-save to JSON file: ' + (entry ? 'ON' : 'OFF');
+    button.replaceChildren(label);
+    if (entry) {
+        const filename = document.createElement('span');
+        filename.className = 'json-file-name';
+        filename.textContent = entry.handle.name || 'Linked JSON file';
+        button.appendChild(filename);
+    }
+    button.title = entry
+        ? 'Automatically writing this profile to "' + (entry.handle.name || 'its linked JSON file') + '". Click to stop writing. GitHub sync stays connected. Re-enable this file link after reopening.'
+        : 'Automatically write this profile to a JSON file on this device (Chrome / Edge). This is separate from GitHub sync; it does not import file changes.';
+    button.className = 'json-file-button px-3 py-1.5 rounded text-xs font-semibold ' + (entry ? 'bg-green-700 hover:bg-green-600' : 'bg-indigo-600 hover:bg-indigo-500');
+}
+
+function beginOnlineExport(title) {
+    if (onlineExporting) { showOnlineError(new Error('Another export is still in progress.')); return false; }
+    onlineExporting = true;
+    document.getElementById('loading-title').textContent = title;
+    document.getElementById('loading-overlay').classList.remove('hidden');
+    renderOnlineToolbar(onlineStore.status());
+    return true;
+}
+
+function finishOnlineExport() {
+    document.getElementById('loading-overlay').classList.add('hidden');
+    onlineExporting = false;
+    renderOnlineToolbar(onlineStore.status());
+    if (onlineStore.state.profiles.some(profile => profile.remotePending)) onlineStore.schedule(0);
 }
 
 async function toggleOnlineLocalFile() {
@@ -1450,6 +1490,14 @@ async function registerOnlineOfflineCache() {
         renderOnlineToolbar(onlineStore.status()); return;
     }
     try {
+        navigator.serviceWorker.addEventListener('message', event => {
+            if (event.source?.scriptURL !== new URL('gantt_online_sw.js', location.href).href || event.data?.type !== 'OFFLINE_CACHE_STATUS') return;
+            onlineCacheStatusError = event.data.error || (event.data.available ? '' : 'The offline application copy is missing. Reopen while online before relying on offline access.');
+            badge.textContent = onlineCacheStatusError ? 'Offline copy needs attention' : 'Offline ready';
+            badge.title = onlineCacheStatusError || badge.textContent;
+            badge.style.backgroundColor = onlineCacheStatusError ? '#f59e0b' : '#22c55e';
+            renderOnlineToolbar(onlineStore.status());
+        });
         onlineWorkerRegistration = await navigator.serviceWorker.register('gantt_online_sw.js', { scope: './', updateViaCache: 'none' });
         const inspect = () => {
             if (onlineWorkerRegistration.active) badge.textContent = 'Offline ready';
@@ -1457,6 +1505,7 @@ async function registerOnlineOfflineCache() {
             badge.title = badge.textContent;
             badge.style.backgroundColor = onlineWorkerRegistration.active ? '#22c55e' : '#6b7280';
             document.getElementById('online-update-button').classList.toggle('hidden', !onlineWorkerRegistration.waiting);
+            onlineWorkerRegistration.active?.postMessage({ type: 'CHECK_OFFLINE_CACHE' });
         };
         inspect();
         onlineWorkerRegistration.addEventListener('updatefound', () => {
@@ -1470,7 +1519,10 @@ async function registerOnlineOfflineCache() {
             });
         });
         navigator.serviceWorker.ready.then(inspect);
-        navigator.serviceWorker.addEventListener('controllerchange', () => { if (onlineUpdating) location.reload(); });
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (onlineUpdating) location.reload();
+            else inspect();
+        });
     } catch (error) {
         onlineOfflineError = 'Offline page caching failed: ' + error.message + '. The downloaded local copy remains usable.';
         renderOnlineToolbar(onlineStore.status());
@@ -1487,14 +1539,16 @@ function applyOnlineUpdate() {
 }
 
 async function startOnlineTracker() {
-    const backups = document.getElementById('backup-menu');
     document.addEventListener('click', event => {
-        if (backups.open && event.target instanceof Element &&
-            (!backups.contains(event.target) || event.target.closest('button'))) backups.open = false;
+        if (!(event.target instanceof Element)) return;
+        document.querySelectorAll('.toolbar-menu[open]').forEach(menu => {
+            if (!menu.contains(event.target) || event.target.closest('button')) menu.open = false;
+        });
     });
     document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && backups.open) {
-            backups.open = false; backups.querySelector('summary').focus();
+        if (event.key === 'Escape') {
+            const menu = document.querySelector('.toolbar-menu[open]');
+            if (menu) { menu.open = false; menu.querySelector('summary').focus(); }
         }
         if (event.key === 'Escape') {
             if (!document.getElementById('profile-import-modal').classList.contains('hidden')) closeOnlineImport();
@@ -1585,6 +1639,19 @@ async function startOnlineTracker() {
         .online-modal { max-height: 90vh; overflow-y: auto; }
         .profile-manager-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
         .profile-delete { color: #fca5a5; }
+        .task-fold-toggle, .task-fold-spacer { width: 22px; flex-shrink: 0; }
+        .task-fold-toggle { height: 24px; display: inline-flex; align-items: center; justify-content: center; color: #9ca3af; border-radius: 4px; }
+        .task-fold-toggle:hover, .task-fold-toggle:focus-visible { color: #fff; background: #374151; }
+        .task-hidden-count { margin-left: 6px; font-size: 10px; font-weight: normal; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
+        .json-file-button { max-width: 250px; text-align: left; }
+        .json-file-button > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .json-file-button .json-file-name { margin-top: 2px; font-size: 10px; font-weight: normal; }
+        .toolbar-menu > summary { list-style: none; cursor: pointer; }
+        .toolbar-menu > summary::-webkit-details-marker { display: none; }
+        .toolbar-menu button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .help-storage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
+        .help-storage-table th, .help-storage-table td { border: 1px solid #4b5563; padding: 8px; text-align: left; vertical-align: top; }
+        .help-storage-table th { color: #fff; background: #111827; }
         #app-toolbar {
             min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
             padding: 8px 16px; flex-shrink: 0; background: #1f2937; border-bottom: 1px solid #374151;
@@ -1610,8 +1677,8 @@ async function startOnlineTracker() {
             #profile-select { max-width: 130px; }
             #toolbar-project-controls { min-width: 0; flex-wrap: wrap; flex-basis: 100%; }
             .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
-            #backup-menu { position: static; }
-            #backup-menu > div { right: 12px; }
+            #backup-menu, #subtasks-menu { position: static; }
+            #backup-menu > div, #subtasks-menu > div { right: 12px; }
         }
     </style>
 </head>
@@ -1641,14 +1708,21 @@ async function startOnlineTracker() {
                 <button onclick="setViewMode('gantt')" id="btn-view-gantt" class="px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white transition-colors">Gantt</button>
                 <button onclick="setViewMode('summary')" id="btn-view-summary" class="px-3 py-1.5 text-xs font-semibold text-gray-400 hover:bg-gray-700 hover:text-white transition-colors">Summary</button>
             </div>
+            <details id="subtasks-menu" class="relative toolbar-menu hidden">
+                <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold whitespace-nowrap" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks &#9662;</summary>
+                <div class="absolute right-0 top-full mt-2 w-56 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1">
+                    <button id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Collapse all subtasks</button>
+                    <button id="expand-all-subtasks" onclick="setAllTaskBranches(false)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Expand all subtasks</button>
+                </div>
+            </details>
         </div>
         <div class="toolbar-actions">
-            <button id="online-status" onclick="openOnlineStatus()" class="px-3 py-1.5 rounded text-xs font-semibold bg-gray-900 text-gray-300 whitespace-nowrap" aria-live="polite">Starting...</button>
+            <span id="online-status" class="px-3 py-1.5 rounded text-xs font-semibold bg-gray-900 text-gray-300 whitespace-nowrap" role="status" aria-live="polite">Starting...</span>
             <button id="online-retry" onclick="onlineStore.retry()" class="hidden px-2.5 py-1.5 bg-amber-700 rounded text-xs">Retry sync</button>
             <button id="github-connect-button" onclick="openGitHubModal()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-semibold whitespace-nowrap">Connect GitHub</button>
             <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs">Recovery</button>
             <button id="online-update-button" onclick="applyOnlineUpdate()" class="hidden px-3 py-1.5 bg-blue-700 rounded text-xs">Update ready</button>
-            <details id="backup-menu" class="relative">
+            <details id="backup-menu" class="relative toolbar-menu">
                 <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1.5" title="Backups and project exports">
                     <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></svg>
                     Backups
@@ -1664,7 +1738,7 @@ async function startOnlineTracker() {
                 </div>
             </details>
             <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
-            <button id="btn-sync" onclick="toggleAutoSave()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold whitespace-nowrap" title="Link a separate local JSON file">Local file</button>
+            <button id="btn-sync" onclick="toggleAutoSave()" class="json-file-button px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold" title="Automatically write this profile to a JSON file on this device. This is separate from GitHub sync."><span>Auto-save to JSON file: OFF</span></button>
             <button onclick="openHelpModal()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 text-white rounded-full" title="Help" aria-label="Help">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
             </button>
@@ -1712,7 +1786,7 @@ async function startOnlineTracker() {
         <div class="flex-1 flex overflow-hidden" id="workspace" style="display: none;">
             <div id="task-panel" class="bg-gray-900 flex flex-col z-10 shadow-lg shrink-0 overflow-hidden transition-[width] duration-75" style="width: 520px;">
                 <div class="min-w-[400px] h-full flex flex-col">
-                    <div class="p-2 border-b border-gray-800 font-semibold text-xs text-gray-400 uppercase flex items-center shrink-0">
+                    <div class="h-10 p-2 border-b border-gray-800 font-semibold text-xs text-gray-400 uppercase flex items-center shrink-0">
                         <div class="w-6"></div>
                         <div class="flex-1">Task Name</div>
                         <div class="w-16 text-center text-blue-400" title="Progress %&#10;* = Automatic&#10;¤ = Manual">Prog</div>
@@ -1788,15 +1862,29 @@ async function startOnlineTracker() {
             <div class="p-8 text-gray-300 text-sm leading-relaxed overflow-y-auto help-content">
                 <p class="mb-6">Welcome to the Project Tracker. This intuitive, single-page application is designed to simplify project scheduling, Gantt chart visualization, and automated progress reporting. Below is a quick, efficient guide to help you master every feature in the app.</p>
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4">Profiles, GitHub &amp; Offline Recovery</h2>
+                <p class="mb-4">Browser saving, GitHub synchronization, JSON-file writing and offline application caching are different features. <b>Saved locally does not mean uploaded.</b> Wait for <b>Synced</b> before relying on another device having your latest work.</p>
+                <table class="help-storage-table">
+                    <thead><tr><th>What</th><th>Really cloud-synced?</th><th>Where it stays</th></tr></thead>
+                    <tbody>
+                        <tr><td>Profile names, projects, tasks, To Dos, sound and wrap-up settings</td><td>Yes, while connected and after a successful upload</td><td>Your private GitHub repository, with a working copy in each connected browser</td></tr>
+                        <tr><td>Pending offline edits</td><td>Not until this device reconnects and uploads them</td><td>This browser; closing the page stops uploads until it is reopened</td></tr>
+                        <tr><td>GitHub token</td><td>No</td><td>This browser's localStorage until Disconnect or clearing site data; never in JSON backups, linked files or the public application</td></tr>
+                        <tr><td>Selected profile/project/date, zoom, panel sizes and collapsed branches</td><td>No</td><td>This browser only. Folding is remembered separately per profile and project, including after reload</td></tr>
+                        <tr><td>Recovery snapshots</td><td>No</td><td>This browser; included in Backup all profiles. Restoring creates a new profile that can then sync</td></tr>
+                        <tr><td>Auto-save to JSON file</td><td>No live file sync</td><td>A one-way copy to a file on this device. Each profile has its own link; reconnect the link after reopening</td></tr>
+                        <tr><td>Offline application cache</td><td>No project-data sync</td><td>Only the public application page, so it can reopen offline. GitHub API responses and tokens are never put in this cache</td></tr>
+                    </tbody>
+                </table>
                 <ul class="mb-6">
-                    <li><b>Profiles:</b> Use the top dropdown to switch separate projects, tasks, To Dos and reminder settings. New Profile creates an empty workspace. Profiles are not logins and do not provide separate permissions.</li>
-                    <li><b>GitHub:</b> Connect a dedicated private data repository with a fine-grained token limited to Contents: read/write. Files and the profile index are created automatically. The token is never stored; repository details are remembered.</li>
-                    <li><b>Continuous sync:</b> Edits save locally immediately and upload about two seconds after you stop editing. Cloud changes are checked on returning to the tab and every 30 seconds while visible. Wait for <b>Synced</b> before switching devices or closing the tab.</li>
-                    <li><b>Offline:</b> Once the page says Offline ready, the app can reopen offline. Cached profiles and pending changes remain available. On reconnect, unchanged cloud files receive local edits automatically; divergent versions produce a recovery dialog instead of an overwrite.</li>
-                    <li><b>Recovery:</b> Keep both places local edits in a separate recovered profile and retains the GitHub version in the original. Other choices retain a recovery snapshot. Recovery snapshots are local and included in Backup all profiles.</li>
-                    <li><b>Local file:</b> Each profile can link its own JSON file in Chrome or Edge. Links must be re-enabled after reopening. This is an additional backup, not a replacement for automatic GitHub sync.</li>
-                    <li><b>Backups:</b> Export Backup exports the current profile; Backup all profiles includes every profile and recovery snapshot. Import accepts old Tracker_Backup.json files and new profile backups. All-profile imports create new profiles without replacing existing ones.</li>
-                    <li><b>Privacy:</b> Public hosting contains only code. Local browser copies are not encrypted or protected by a login; use a trusted browser/device. Only one tracker tab can edit the shared browser cache at a time.</li>
+                    <li><b>Profiles:</b> Use the dropdown to switch workspaces and the people icon to Add, Use, Rename or Delete. Profiles are not logins: a token with access to the private repository can access all its profiles.</li>
+                    <li><b>GitHub connection:</b> Paste a fine-grained token limited to one private data repository with Contents: read/write. GitHub identifies its account and repository; your website can be hosted by a different account. Each browser needs its own first connection, then remembers the token until Disconnect.</li>
+                    <li><b>Automatic checks:</b> Uploads normally start about two seconds after editing stops. Checks also run on reopening, returning to the tab, reconnecting and every 30 seconds while visible. New profiles are discovered; existing clean inactive profiles refresh when selected. This is not instantaneous live collaboration.</li>
+                    <li><b>Another device:</b> An unchanged cached profile accepts newer cloud data automatically. If only this device changed, it uploads. If both sides changed into different versions, <b>Needs attention</b> asks what to keep; saved offline work is not silently discarded. Checks use the last-synced version, not whichever device opened last.</li>
+                    <li><b>Conflict choices:</b> <b>Keep this device's version</b> uploads this copy and snapshots the previous GitHub version locally. <b>Use GitHub's version</b> snapshots this copy locally before loading the cloud version. <b>Keep both</b> keeps the cloud original and makes a separate recovered-local profile. Conflicts are per whole profile, not automatically merged task by task.</li>
+                    <li><b>Busy editors:</b> Incoming replacements wait while an editor, dialog, file chooser or drag is active. <b>Cloud update waiting</b> is not an error. Finishing a local edit may require a conflict choice if GitHub also changed.</li>
+                    <li><b>Offline:</b> Wait for <b>Offline ready</b> before depending on offline reopening. Only data already cached on this browser is available offline; another device cannot receive your pending edits while this page is closed or disconnected.</li>
+                    <li><b>Privacy and recovery:</b> Browser storage is not encrypted. Scripts on the same origin can read it; a /tracker/ folder shares its origin with the main website, while a separate subdomain isolates it. Clearing site data removes local tokens, views, pending edits and recovery snapshots. Keep private backups.</li>
+                    <li><b>Editing tabs:</b> One editing tab is allowed per browser origin. This does not lock a second physical device out of editing; concurrent divergent work uses the conflict choices above.</li>
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4">1. Project Workspace Management</h2>
@@ -1821,6 +1909,8 @@ async function startOnlineTracker() {
                     <li><b>Add Subtasks:</b> Hover over a task and click the green <b>+</b> icon to add a nested subtask.</li>
                     <li><b>Indent / Outdent:</b> Click the <b>&lt;</b> or <b>&gt;</b> buttons in the task's hover menu to adjust hierarchy levels.</li>
                     <li><b>Automatic Parent Tracking:</b> Parent tasks automatically adjust their start date, duration, and completion progress based on their children. You do not need to change them manually!</li>
+                    <li><b>Collapse a branch:</b> The chevron beside a parent hides or reveals all its descendants in Gantt and Summary. A collapsed parent shows how many tasks are hidden. Hidden tasks still contribute to dates, durations and progress; moving a parent still moves its complete branch.</li>
+                    <li><b>Collapse / expand all:</b> The <b>Subtasks</b> menu affects only the selected project. Both views share that project's folding preferences in this browser, including after reload. These preferences are not cloud-synced and do not create GitHub commits.</li>
                 </ul>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Progress Tracking</h3>
                 <ul>
@@ -1844,33 +1934,38 @@ async function startOnlineTracker() {
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">4. Saving and State Persistence</h2>
-                <p class="mb-4">Your data is secured through three layered saving mechanisms:</p>
+                <p class="mb-4">These saving mechanisms can run together; none is a separate profile login:</p>
                 <h3 class="text-lg font-bold text-white mb-2">A. Browser LocalStorage (Automatic)</h3>
-                <p class="mb-4">The application automatically saves every action locally in your browser. If you refresh or close the page, your workspace will restore exactly where you left it.</p>
-                <h3 class="text-lg font-bold text-white mb-2">B. Live Auto-Save (Linked Local File)</h3>
-                <p class="mb-2">For secure, continuous backup directly onto your computer's hard drive:</p>
+                <p class="mb-4">Saved actions and local view preferences survive refreshes in this browser. Unsynced edits cannot reach another device until uploaded. Text not yet submitted in an editor or add-item field is not a saved action.</p>
+                <h3 class="text-lg font-bold text-white mb-2">B. GitHub Cloud Sync</h3>
+                <p class="mb-4">Connect once per browser. <b>Synced</b> is a read-only indicator; <b>GitHub settings</b> manages the connection. Temporary network failures retry; expired tokens or denied permissions need attention. Closing the page stops its synchronization. Local JSON writing is independent.</p>
+                <h3 class="text-lg font-bold text-white mb-2">C. Auto-save to JSON file</h3>
+                <p class="mb-2">For an additional, continuously updated copy on this device:</p>
                 <ol class="list-decimal list-inside mb-4 pl-4">
-                    <li>Click "Local file" in the main header.</li>
+                    <li>Click <b>Auto-save to JSON file: OFF</b> in the main header.</li>
                     <li>Your browser will prompt you to create or link a file (e.g., <b>My_Tracker_Live.json</b>).</li>
-                    <li>Once enabled, the button turns green. Every change you make in this profile is written to that file. GitHub synchronization remains independent; local-file failures are shown without disconnecting GitHub.</li>
+                    <li>Once enabled, the button shows <b>ON</b> and the filename. Saved changes in this profile are written there. Click again to stop; neither linking nor a write failure disconnects GitHub.</li>
+                    <li>Re-enable the link after reopening. The file remains on disk. This is one-way writing: external file edits are not read back. Import any existing file contents you need before choosing that file for automatic writing.</li>
                 </ol>
-                <h3 class="text-lg font-bold text-white mb-2">C. Manual Backups (Import / Export)</h3>
+                <h3 class="text-lg font-bold text-white mb-2">D. Manual Backups (Import / Export)</h3>
                 <ul>
-                    <li><b>Export Backup:</b> Use <b>Backups &gt; Export Backup</b> for the active profile, or <b>Backup all profiles</b> for every profile and its recovery snapshots.</li>
+                    <li><b>Export Backup:</b> Use <b>Backups &gt; Export Backup</b> for the active profile, or <b>Backup all profiles</b> for every profile and its recovery snapshots. JSON always contains all tasks, including collapsed subtasks; it does not contain browser-only view preferences or the token.</li>
                     <li><b>Import Backup:</b> Select the source and destination profile. Import as a new profile, add to existing content, or explicitly replace it. Existing destinations are backed up to Recovery first.</li>
                 </ul>
-                <p class="mt-4 mb-2"><b>Manage profiles:</b> The people icon beside the profile selector opens Add, Use, Rename and Delete. Deletion syncs to all devices and retains a recovery copy; it does not erase local JSON files. Deleting the last profile creates an empty Default profile.</p>
+                <p class="mt-4 mb-2"><b>Manage profiles:</b> The people icon beside the profile selector opens Add, Use, Rename and Delete. Deletion syncs to all devices and retains each device's latest local copy in its Recovery, including pending edits. It does not erase local JSON files or Git history. Recovery restores a new profile; the deleted identity is not reintroduced. Deleting the last profile creates an empty Default profile. Older apps may need updating after the first synced deletion.</p>
                 <p class="mb-4"><b>GitHub connection:</b> Your token is remembered in this browser until Disconnect, so reopening restores synchronization. It is never included in data backups. Use a trusted browser because scripts on the same website can access its stored token.</p>
                 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">5. Exporting Assets</h2>
                 <p class="mb-2">Generate instant stakeholder reports from the top-right header toolbar:</p>
                 <ul>
-                    <li><b>Export PNG Image:</b> Generates a high-resolution, cropped visual snapshot of your Gantt timeline.</li>
-                    <li><b>Export PDF Report:</b> Generates a professional print-ready document containing your project overview, rich-text notes, structured task hierarchy tables, and the visual Gantt timeline.</li>
+                    <li><b>Gantt PNG image:</b> Use <b>Backups &gt; Export Gantt image</b> in Gantt view. It includes the displayed branches, not collapsed descendants, across the rendered rows rather than just the scroll viewport.</li>
+                    <li><b>PDF report:</b> Available from Backups in Gantt and Summary. It always includes every task, all notes and a fully expanded Gantt chart, regardless of folding. Your local collapsed view is restored after export.</li>
+                    <li><b>Summary Copy:</b> Copies the currently displayed summary branches. Use PDF or JSON when you need all hidden descendants as well.</li>
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">6. To Do List</h2>
                 <p class="mb-4">Click <b>To Do</b> in the sidebar to open a simple day-by-day checklist. It is completely separate from your Gantt schedules and never affects your project tasks.</p>
+                <p class="mb-4"><b>Export:</b> The To Do header's <b>Export</b> menu downloads a print-friendly <b>PDF</b> or a <b>PNG image</b>. Both include the selected day and the Overdue section as shown, with completed items, reminder times and project tags, but without editing controls or navigation. This is not an all-dates export; unsaved add-item text is not included. Calendar .ics exports below remain available.</p>
                 <h3 class="text-lg font-bold text-white mb-2">Adding &amp; Completing Items</h3>
                 <ul>
                     <li><b>Add:</b> Type in the box at the bottom and press <b>Enter</b>. The cursor stays put so you can add several items in a row.</li>
@@ -1916,6 +2011,8 @@ async function startOnlineTracker() {
                     <li>Tagging is entirely optional—leave it on "No project" for general items.</li>
                 </ul>
                 <p class="mb-4">To Do items are saved with everything else—they are included in your LocalStorage, Live Auto-Save file, and JSON backups automatically.</p>
+                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">7. Application Updates and Offline Access</h2>
+                <p class="mb-4">Online page loads try the latest published application and update its offline copy. If the page cannot be downloaded, the last cached application is used. Already open tabs keep their current application code until reloaded; GitHub data checks are independent of this. Routine interface releases can update only index.html after the stable worker has been installed. A changed worker may show <b>Update ready</b>; finish syncing before activating it. Never clear site data just to update, because that removes unsynced work and local recovery.</p>
             </div>
         </div>
     </div>
@@ -2012,14 +2109,14 @@ async function startOnlineTracker() {
     </div>
     <div id="cloud-conflict-modal" class="hidden fixed inset-0 bg-black/70 z-[90] flex items-center justify-center p-4">
         <div class="online-modal bg-gray-800 border border-amber-600 rounded-xl shadow-2xl w-full max-w-xl p-6">
-            <h2 class="text-xl font-bold mb-3">Recover local / cloud changes</h2>
+            <h2 class="text-xl font-bold mb-3">Choose which changes to keep</h2>
             <p id="cloud-conflict-description" class="text-sm text-gray-300 mb-4"></p>
             <pre id="cloud-conflict-summary" class="text-xs text-gray-300 whitespace-pre-wrap bg-gray-900 rounded p-3 mb-4"></pre>
-            <p class="text-xs text-gray-400 mb-5">Nothing is overwritten automatically. Choosing a version also retains the other snapshot in Recovery and all-profiles backups. GitHub is checked again before uploading.</p>
+            <p class="text-xs text-gray-400 mb-5">Nothing is replaced automatically. Keep both creates a separate profile. Choosing one version keeps the other snapshot in Recovery on this browser, also included in all-profiles backups. GitHub is checked again before uploading.</p>
             <div class="flex flex-wrap gap-2">
                 <button id="conflict-both" onclick="resolveOnlineConflict('both')" class="px-3 py-2 bg-green-700 rounded text-sm font-semibold">Keep both (recommended)</button>
-                <button id="conflict-local" onclick="resolveOnlineConflict('local')" class="px-3 py-2 bg-amber-700 rounded text-sm">Use local version</button>
-                <button id="conflict-remote" onclick="resolveOnlineConflict('remote')" class="px-3 py-2 bg-blue-700 rounded text-sm">Use GitHub version</button>
+                <button id="conflict-local" onclick="resolveOnlineConflict('local')" class="px-3 py-2 bg-amber-700 rounded text-sm" title="Upload this device's version; retain the replaced GitHub version in this browser's Recovery">Keep this device's version</button>
+                <button id="conflict-remote" onclick="resolveOnlineConflict('remote')" class="px-3 py-2 bg-blue-700 rounded text-sm" title="Load GitHub's version; retain this device's version in this browser's Recovery">Use GitHub's version</button>
                 <button onclick="downloadOnlineConflict()" class="px-3 py-2 bg-gray-700 rounded text-sm">Download both</button>
                 <button onclick="closeOnlineConflict()" class="px-3 py-2 bg-gray-700 rounded text-sm">Decide later</button>
             </div>
@@ -2114,73 +2211,67 @@ async function startOnlineTracker() {
         }
         // --- SMART IMAGE & PDF GENERATION ---
         
-        async function captureGanttCanvas() {
+        async function captureGanttCanvas(expandAll = false) {
+            const project = data.projects.find(item => item.id === activeProjectId);
+            if (!project) throw new Error('Open a project before exporting its chart.');
             const workspace = document.getElementById('workspace');
             const scrollContainer = document.getElementById('gantt-scroll');
             const taskPanel = document.getElementById('task-panel');
+            const taskList = document.getElementById('task-list');
             const addRootBtnContainer = document.getElementById('add-root-container');
-            
             const tasks = data.tasks[activeProjectId] || [];
-            let minDay = 0;
-            let maxDay = 30;
-            if (tasks.length > 0) {
-                minDay = Math.min(...tasks.map(t => t.startDay));
-                maxDay = Math.max(...tasks.map(t => t.startDay + t.duration));
+            const rows = taskDisplayRows(tasks, expandAll);
+            const styledElements = [workspace, scrollContainer, taskPanel, taskList, addRootBtnContainer, document.getElementById('summary-view')];
+            const styles = styledElements.map(element => [element, element.getAttribute('style')]);
+            const originalDays = TOTAL_GANTT_DAYS;
+            const scroll = { left: scrollContainer.scrollLeft, top: scrollContainer.scrollTop, list: taskList.scrollTop };
+            try {
+                let minDay = rows.length ? Math.min(...rows.map(row => row.task.startDay)) : 0;
+                let maxDay = rows.length ? Math.max(...rows.map(row => row.task.startDay + row.task.duration)) : 30;
+                if (expandAll) TOTAL_GANTT_DAYS = Math.max(TOTAL_GANTT_DAYS, maxDay + 5);
+                minDay = Math.min(Math.max(0, minDay - 1), TOTAL_GANTT_DAYS - 1);
+                maxDay = Math.max(minDay + 1, Math.min(TOTAL_GANTT_DAYS, maxDay + 5));
+                renderGanttView(project, expandAll);
+                document.getElementById('summary-view').style.display = 'none';
+                addRootBtnContainer.style.display = 'none';
+                workspace.style.display = 'flex';
+                workspace.style.flex = 'none';
+                taskPanel.style.width = Math.max(400, taskPanelWidth) + 'px';
+                taskPanel.style.opacity = '1';
+                taskList.style.overflow = 'hidden';
+                taskList.style.paddingBottom = '0';
+                taskList.scrollTop = 0;
+                const totalCaptureWidth = Math.max(400, taskPanelWidth) + 4 + (maxDay - minDay) * dayWidth;
+                const totalCaptureHeight = rows.length * ROW_HEIGHT + 40;
+                workspace.style.width = totalCaptureWidth + 'px';
+                workspace.style.height = totalCaptureHeight + 'px';
+                scrollContainer.style.overflow = 'hidden';
+                scrollContainer.scrollLeft = minDay * dayWidth;
+                scrollContainer.scrollTop = 0;
+                await new Promise(resolve => setTimeout(resolve, 50));
+                const canvas = await html2canvas(workspace, {
+                    scale: 1.5, backgroundColor: '#111827', logging: false,
+                    width: totalCaptureWidth, height: totalCaptureHeight,
+                    windowWidth: totalCaptureWidth, windowHeight: totalCaptureHeight
+                });
+                const image = canvas.toDataURL('image/png');
+                if (!image.startsWith('data:image/png;base64,')) throw new Error('The chart is too large to capture. Reduce the zoom or split the project.');
+                return image;
+            } finally {
+                TOTAL_GANTT_DAYS = originalDays;
+                styles.forEach(([element, style]) => {
+                    if (style === null) element.removeAttribute('style');
+                    else element.setAttribute('style', style);
+                });
+                render();
+                taskList.scrollTop = scroll.list;
+                scrollContainer.scrollLeft = scroll.left;
+                scrollContainer.scrollTop = scroll.top;
             }
-            minDay = Math.max(0, minDay - 1);
-            maxDay = Math.min(TOTAL_GANTT_DAYS, maxDay + 5);
-            const startPx = minDay * dayWidth;
-            const captureWidth = (maxDay - minDay) * dayWidth;
-            
-            const origTaskPanelWidth = taskPanel.style.width;
-            
-            const origFlex = workspace.style.flex;
-            const origWidth = workspace.style.width;
-            const origHeight = workspace.style.height;
-            const origScrollLeft = scrollContainer.scrollLeft;
-            const origOverflow = scrollContainer.style.overflow;
-
-            if (addRootBtnContainer) addRootBtnContainer.style.display = 'none';
-            workspace.style.flex = 'none';
-            taskPanel.style.width = 'max-content';
-            
-            await new Promise(r => setTimeout(r, 50)); 
-            
-            const finalTaskPanelWidth = taskPanel.getBoundingClientRect().width;
-            const totalCaptureWidth = finalTaskPanelWidth + 4 + captureWidth;
-            const totalCaptureHeight = (tasks.length * ROW_HEIGHT) + 40; 
-            workspace.style.width = totalCaptureWidth + 'px';
-            workspace.style.height = totalCaptureHeight + 'px';
-            scrollContainer.style.overflow = 'hidden'; 
-            scrollContainer.scrollLeft = startPx;
-
-            await new Promise(r => setTimeout(r, 50));
-
-            const canvas = await html2canvas(workspace, { 
-                scale: 1.5, 
-                backgroundColor: '#111827', 
-                logging: false,
-                width: totalCaptureWidth,
-                height: totalCaptureHeight,
-                windowWidth: totalCaptureWidth,
-                windowHeight: totalCaptureHeight
-            });
-            
-            workspace.style.flex = origFlex;
-            workspace.style.width = origWidth;
-            workspace.style.height = origHeight;
-            scrollContainer.style.overflow = origOverflow;
-            scrollContainer.scrollLeft = origScrollLeft;
-            taskPanel.style.width = origTaskPanelWidth;
-            if (addRootBtnContainer) addRootBtnContainer.style.display = '';
-
-            return canvas.toDataURL('image/png');
         }
 
         async function exportToImage() {
-            document.getElementById('loading-title').innerText = "Generating Image...";
-            document.getElementById('loading-overlay').classList.remove('hidden');
-            
+            if (!beginOnlineExport('Generating Gantt Image...')) return;
             try {
                 await new Promise(r => setTimeout(r, 100)); 
                 
@@ -2196,19 +2287,19 @@ async function startOnlineTracker() {
                 console.error(e);
                 alert("Failed to generate image.");
             } finally {
-                document.getElementById('loading-overlay').classList.add('hidden');
+                finishOnlineExport();
             }
         }
 
         async function exportToPDF() {
-            document.getElementById('loading-title').innerText = "Generating PDF Report...";
-            document.getElementById('loading-overlay').classList.remove('hidden');
+            if (!beginOnlineExport('Generating PDF Report...')) return;
             try {
                 const project = data.projects.find(p => p.id === activeProjectId);
+                if (!project) throw new Error('Open a project before exporting its report.');
                 const tasks = data.tasks[activeProjectId] || [];
                 const countWknds = project.countWeekends !== false;
 
-                const imgData = await captureGanttCanvas();
+                const imgData = await captureGanttCanvas(true);
 
                 const pdfContainer = document.createElement('div');
                 let html = `
@@ -2280,7 +2371,77 @@ async function startOnlineTracker() {
                 console.error(e);
                 alert("Failed to generate PDF.");
             } finally {
-                document.getElementById('loading-overlay').classList.add('hidden');
+                finishOnlineExport();
+            }
+        }
+        function buildTodoExport() {
+            const selectedDate = todoDate || todoTodayStr();
+            const container = document.createElement('section');
+            container.className = 'todo-export-document';
+            container.style.cssText = 'box-sizing:border-box;width:100%;padding:24px;background:#fff;color:#111827;font:14px/1.5 Arial,sans-serif;';
+            let html = `<h1 style="font-size:28px;font-weight:bold;margin:0 0 6px;">To Do</h1>
+                <p style="color:#4b5563;margin:0 0 24px;">${todoEsc(onlineStore.current().name)} &mdash; ${todoEsc(selectedDate)}</p>`;
+            const section = (title, entries, overdue) => {
+                let result = `<h2 style="font-size:18px;font-weight:bold;margin:24px 0 10px;color:${overdue ? '#991b1b' : '#111827'};">${todoEsc(title)}</h2>`;
+                if (!entries.length) return result + '<p style="color:#6b7280;">Nothing planned for this day.</p>';
+                entries.forEach(({ date, item }) => {
+                    const project = item.projectId ? data.projects.find(value => value.id === item.projectId) : null;
+                    const metadata = [item.done ? 'Completed' : 'Open'];
+                    if (overdue) metadata.push('Due ' + date);
+                    if (item.time) metadata.push(todoFmtTime(item.time));
+                    if (project) metadata.push(project.name);
+                    result += `<div class="todo-export-item" style="break-inside:avoid;page-break-inside:avoid;border:1px solid #d1d5db;border-radius:6px;padding:12px;margin:0 0 8px;display:flex;align-items:flex-start;gap:12px;">
+                        <span style="display:inline-block;flex-shrink:0;width:18px;height:18px;line-height:16px;margin-top:2px;text-align:center;border:1px solid #6b7280;border-radius:3px;font-weight:bold;">${item.done ? 'x' : ''}</span>
+                        <div style="min-width:0;flex:1;">
+                            <div style="white-space:pre-wrap;overflow-wrap:anywhere;${item.done ? 'text-decoration:line-through;color:#4b5563;' : ''}">${todoEsc(item.text)}</div>
+                            <div style="font-size:11px;color:#4b5563;margin-top:4px;overflow-wrap:anywhere;">${metadata.map(todoEsc).join(' &nbsp;|&nbsp; ')}</div>
+                        </div>
+                    </div>`;
+                });
+                return result;
+            };
+            const overdue = getOverdueTodos();
+            if (overdue.length) html += section('Overdue (' + overdue.length + ')', overdue, true);
+            html += section(todoLongDate(selectedDate) + ' (' + selectedDate + ')',
+                (data.todos[selectedDate] || []).map(item => ({ date: selectedDate, item })), false);
+            container.innerHTML = html;
+            return container;
+        }
+        async function exportTodo(format) {
+            if (!['pdf', 'png'].includes(format)) { showOnlineError(new Error('Choose PDF or PNG for the To Do export.')); return; }
+            if (!beginOnlineExport('Generating To Do ' + format.toUpperCase() + '...')) return;
+            let holder;
+            try {
+                const documentToExport = buildTodoExport();
+                const filename = onlineFileName(onlineStore.current().name) + '_todo_' + (todoDate || todoTodayStr()) + '.' + format;
+                if (format === 'pdf') {
+                    await html2pdf().set({
+                        margin: 10, filename, image: { type: 'jpeg', quality: 0.98 },
+                        html2canvas: { scale: 2, backgroundColor: '#ffffff', logging: false },
+                        pagebreak: { mode: ['css', 'legacy'] },
+                        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                    }).from(documentToExport).save();
+                } else {
+                    holder = document.createElement('div');
+                    holder.style.cssText = 'position:fixed;left:0;top:0;width:800px;z-index:-1;pointer-events:none;';
+                    holder.appendChild(documentToExport);
+                    document.body.appendChild(holder);
+                    const canvas = await html2canvas(documentToExport, {
+                        scale: 1.5, backgroundColor: '#ffffff', logging: false,
+                        width: 800, height: documentToExport.scrollHeight,
+                        windowWidth: 800, windowHeight: Math.max(1000, documentToExport.scrollHeight)
+                    });
+                    const image = canvas.toDataURL('image/png');
+                    if (!image.startsWith('data:image/png;base64,')) throw new Error('The To Do list is too large to capture as one image.');
+                    const link = document.createElement('a');
+                    link.download = filename; link.href = image; link.click();
+                }
+            } catch (error) {
+                console.error('To Do export:', error);
+                alert('Failed to generate the To Do export: ' + error.message);
+            } finally {
+                holder?.remove();
+                finishOnlineExport();
             }
         }
         // --- PASTE INTERCEPTOR (SANITIZER) ---
@@ -2336,6 +2497,69 @@ async function startOnlineTracker() {
             TOTAL_GANTT_DAYS = zoomLevel === 'day' ? 90 : zoomLevel === 'week' ? 365 : 1095;
             writeOnlineView('zoom', zoomLevel);
             render();
+        }
+        function collapsedTaskIds() {
+            const byProject = readOnlineView('collapsedTasks', {});
+            const ids = byProject && typeof byProject === 'object' && !Array.isArray(byProject) ? byProject[activeProjectId] : null;
+            return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+        }
+        function taskDisplayRows(tasks, expandAll = false) {
+            const collapsed = expandAll ? new Set() : collapsedTaskIds();
+            const rows = [];
+            let hiddenBelow = null;
+            tasks.forEach((task, index) => {
+                const level = task.indent || 0;
+                if (hiddenBelow !== null && level > hiddenBelow) return;
+                hiddenBelow = null;
+                const hasChildren = index + 1 < tasks.length && (tasks[index + 1].indent || 0) > level;
+                const folded = hasChildren && collapsed.has(task.id);
+                let hiddenCount = 0;
+                if (folded) {
+                    for (let next = index + 1; next < tasks.length && (tasks[next].indent || 0) > level; next++) hiddenCount++;
+                    hiddenBelow = level;
+                }
+                rows.push({ task, index, hasChildren, folded, hiddenCount });
+            });
+            return rows;
+        }
+        function taskFoldControl(row) {
+            if (!row.hasChildren) return '<span class="task-fold-spacer" aria-hidden="true"></span>';
+            const action = row.folded ? 'Expand' : 'Collapse';
+            const label = TrackerOnline.escapeText(action + ' subtasks of ' + row.task.name);
+            return `<button type="button" class="task-fold-toggle" data-fold-index="${row.index}" draggable="false" aria-expanded="${!row.folded}" aria-label="${label}" title="${label}" onclick="event.stopPropagation();toggleTaskBranch(${row.index})"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${row.folded ? 'm9 6 6 6-6 6' : 'm6 9 6 6 6-6'}"></path></svg></button>`;
+        }
+        function saveTaskFolding(ids) {
+            const saved = readOnlineView('collapsedTasks', {});
+            const byProject = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+            const tasks = data.tasks[activeProjectId] || [];
+            const parents = tasks.filter((task, index) => index + 1 < tasks.length && (tasks[index + 1].indent || 0) > (task.indent || 0));
+            writeOnlineView('collapsedTasks', { ...byProject, [activeProjectId]: parents.filter(task => ids.has(task.id)).map(task => task.id) });
+            render();
+        }
+        function toggleTaskBranch(index) {
+            const row = taskDisplayRows(data.tasks[activeProjectId] || [], true).find(item => item.index === index);
+            if (!row?.hasChildren) { showOnlineError(new Error('This task no longer has subtasks to collapse.')); return; }
+            const ids = collapsedTaskIds();
+            if (ids.has(row.task.id)) ids.delete(row.task.id);
+            else ids.add(row.task.id);
+            saveTaskFolding(ids);
+            const container = document.getElementById(currentViewMode === 'summary' ? 'summary-content' : 'task-list');
+            container.querySelector(`[data-fold-index="${index}"]`)?.focus({ preventScroll: true });
+        }
+        function setAllTaskBranches(folded) {
+            const tasks = data.tasks[activeProjectId] || [];
+            const ids = folded ? new Set(taskDisplayRows(tasks, true).filter(row => row.hasChildren).map(row => row.task.id)) : new Set();
+            document.getElementById('subtasks-menu').open = false;
+            saveTaskFolding(ids);
+            document.querySelector('#subtasks-menu > summary').focus({ preventScroll: true });
+        }
+        function syncGanttScroll(source) {
+            const list = document.getElementById('task-list');
+            const timeline = document.getElementById('gantt-scroll');
+            const top = Math.max(0, Math.min(source.scrollTop,
+                list.scrollHeight - list.clientHeight, timeline.scrollHeight - timeline.clientHeight));
+            if (list.scrollTop !== top) list.scrollTop = top;
+            if (timeline.scrollTop !== top) timeline.scrollTop = top;
         }
         function toggleCountWeekends() {
             if (!activeProjectId || activeProjectId === 'overview') return;
@@ -3248,7 +3472,14 @@ async function startOnlineTracker() {
             let html = `
             <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
                 <h2 class="text-3xl font-extrabold text-white">To Do</h2>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <details id="todo-export-menu" class="relative toolbar-menu">
+                        <summary class="px-3 h-9 bg-gray-800 border border-gray-700 hover:bg-gray-700 rounded text-xs font-bold flex items-center" title="Export this day and the overdue section">Export &#9662;</summary>
+                        <div class="absolute left-0 top-full mt-2 w-56 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1" style="z-index:30;">
+                            <button onclick="exportTodo('pdf')" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Export To Do PDF</button>
+                            <button onclick="exportTodo('png')" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Export To Do PNG image</button>
+                        </div>
+                    </details>
                     <button onclick="toggleTodoSound()" class="w-9 h-9 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 flex items-center justify-center ${todoSoundOn() ? 'text-blue-400' : 'text-gray-600'}" title="${todoSoundOn() ? 'Reminder sound is on' : 'Reminder sound is off'}">${todoSoundOn() ? svgSoundOn : svgSoundOff}</button>
                     <label class="flex items-center gap-1.5 h-9 px-2 rounded bg-gray-800 border border-gray-700 cursor-pointer" title="Daily wrap-up: at this time you get one reminder listing everything still open, whether or not it has its own time. Clear the box to switch it off.">
                         <span class="text-[10px] font-bold uppercase tracking-wider ${todoDigestTime() ? 'text-blue-400' : 'text-gray-600'}">Wrap-up</span>
@@ -3469,12 +3700,15 @@ async function startOnlineTracker() {
                     </div>
                 </div>`;
             
-            let counters = []; 
+            const visibleRows = new Map(taskDisplayRows(tasks).map(row => [row.index, row]));
+            let counters = [];
             tasks.forEach((task, index) => {
                 const lvl = task.indent || 0;
                 while(counters.length <= lvl) counters.push(0);
                 counters[lvl]++; counters.fill(0, lvl + 1); 
                 const numStr = counters.slice(0, lvl + 1).join('.') + '.';
+                const row = visibleRows.get(index);
+                if (!row) return;
                 let badge = task.progress === 0 ? `<span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-red-900/50 text-red-400 border border-red-800">To Do</span>` : task.progress === 100 ? `<span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-green-900/50 text-green-400 border border-green-800">Done</span>` : `<span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-yellow-900/50 text-yellow-400 border border-yellow-800">In Progress</span>`;
                 
                 let descHTML = TrackerOnline.sanitizeRichText(task.description);
@@ -3487,13 +3721,15 @@ async function startOnlineTracker() {
                 const durationLabel = task.isMilestone ? '(Milestone)' : `(${displayDur} ${durUnit})`;
 
                 html += `
-                <div class="mb-6 group" style="margin-left: ${lvl * 2.5}rem;">
+                <div class="mb-6 group" data-summary-task-index="${index}" style="margin-left: ${lvl * 2.5}rem;">
                     <div class="flex items-start gap-3">
+                        ${taskFoldControl(row)}
                         <span class="font-mono text-gray-500 font-semibold w-12 shrink-0 text-right mt-1">${numStr}</span>
                         <div class="flex-1">
                             <div class="flex items-center gap-3 flex-wrap">
                                 <span class="${textClass} flex items-center gap-2">
                                     ${task.isMilestone ? '♦ ' : ''}${TrackerOnline.escapeText(task.name)}
+                                    ${row.folded ? `<span class="task-hidden-count">${row.hiddenCount} subtasks hidden</span>` : ''}
                                     <span class="text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <span class="hover:text-yellow-400 cursor-pointer" onclick="renameTask(${index})">${svgRename}</span>
                                     </span>
@@ -3514,6 +3750,13 @@ async function startOnlineTracker() {
         function render() {
             document.getElementById('toolbar-project-controls').style.display =
                 activeProjectId && !['overview', 'todo'].includes(activeProjectId) ? 'flex' : 'none';
+            const branchRows = taskDisplayRows(data.tasks[activeProjectId] || [], true).filter(row => row.hasChildren);
+            const collapsed = collapsedTaskIds();
+            const subtasksMenu = document.getElementById('subtasks-menu');
+            subtasksMenu.classList.toggle('hidden', branchRows.length === 0);
+            if (!branchRows.length) subtasksMenu.open = false;
+            document.getElementById('collapse-all-subtasks').disabled = branchRows.every(row => collapsed.has(row.task.id));
+            document.getElementById('expand-all-subtasks').disabled = !branchRows.some(row => collapsed.has(row.task.id));
             document.getElementById('todo-view').style.display = 'none';
             const sidebar = document.getElementById('sidebar');
             const tp = document.getElementById('task-panel');
@@ -3617,9 +3860,9 @@ async function startOnlineTracker() {
                 document.getElementById('workspace').style.display = 'none';
                 document.getElementById('summary-view').style.display = 'block';
                 
-                btnExportPdf.classList.add('hidden');
+                btnExportPdf.classList.remove('hidden');
                 btnExportImg.classList.add('hidden'); 
-                exportDivider.style.display = 'none';
+                exportDivider.style.display = 'block';
                 
                 renderSummaryView();
             } else {
@@ -3633,14 +3876,16 @@ async function startOnlineTracker() {
                 renderGanttView(currentProject);
             }
         }
-        function renderGanttView(project) {
+        function renderGanttView(project, expandAll = false) {
             const tasks = data.tasks[activeProjectId] || [];
+            const displayRows = taskDisplayRows(tasks, expandAll);
             const countWknds = project.countWeekends !== false;
             
             const listEl = document.getElementById('task-list');
             listEl.innerHTML = '';
             
-            tasks.forEach((task, index) => {
+            displayRows.forEach(displayRow => {
+                const { task, index } = displayRow;
                 const indentLevel = task.indent || 0;
                 let descHTML = task.description || "";
                 const hasDesc = !!(descHTML !== "<br>" && descHTML.trim() !== "");
@@ -3648,6 +3893,7 @@ async function startOnlineTracker() {
                 const displayDur = task.isMilestone ? 0 : getDisplayDuration(task.startDay, task.duration, project.startDate, countWknds);
                 
                 const row = document.createElement('div');
+                row.dataset.taskIndex = index;
                 row.className = "group flex border-b border-gray-800 h-10 items-center px-2 hover:bg-gray-800 task-row bg-gray-900 relative";
                 row.draggable = true;
                 
@@ -3655,9 +3901,11 @@ async function startOnlineTracker() {
                     <div class="w-6 drag-grip select-none text-center" title="Drag to reorder">⋮⋮</div>
                     <div class="flex-1 flex items-center truncate" title="${TrackerOnline.escapeText(getTooltipText(task, project.startDate, countWknds))}">
                         <div style="width: ${indentLevel * 1.5}rem" class="shrink-0"></div>
+                        ${taskFoldControl(displayRow)}
                         <span class="truncate ${indentLevel > 0 ? 'text-gray-300' : 'font-medium'} ${task.isParent ? 'font-bold' : ''}">
                             ${task.isMilestone ? '♦' : ''} ${TrackerOnline.escapeText(task.name)}
                         </span>
+                        ${displayRow.folded ? `<span class="task-hidden-count" title="${displayRow.hiddenCount} subtasks hidden">${displayRow.hiddenCount} hidden</span>` : ''}
                         ${hasDesc ? `<span class="ml-1.5 text-gray-500">${svgNoteIcon}</span>` : ''}
                         
                         <div class="hidden group-hover:flex ml-2 gap-1 text-gray-400 font-bold shrink-0 items-center bg-gray-700 px-1 py-0.5 rounded shadow-lg text-xs">
@@ -3682,6 +3930,7 @@ async function startOnlineTracker() {
                     </div>
                 `;
                 row.addEventListener('dragstart', (e) => {
+                    if (e.target.closest('button')) { e.preventDefault(); return; }
                     dragStartIndex = index;
                     dragBranchSize = 1;
                     while(dragStartIndex + dragBranchSize < tasks.length && (tasks[dragStartIndex + dragBranchSize].indent || 0) > indentLevel) dragBranchSize++;
@@ -3762,8 +4011,8 @@ async function startOnlineTracker() {
             bgEl.innerHTML = bgHTML;
             const barsContainer = document.getElementById('gantt-bars');
             barsContainer.innerHTML = '';
-            tasks.forEach((task, index) => {
-                const top = index * ROW_HEIGHT + 8;
+            displayRows.forEach(({ task, index }, visibleIndex) => {
+                const top = visibleIndex * ROW_HEIGHT + 8;
                 const left = task.startDay * dayWidth;
                 const width = Math.max(task.duration * dayWidth, task.isParent ? 12 : 0); 
                 const indentLevel = task.indent || 0;
@@ -3812,7 +4061,8 @@ async function startOnlineTracker() {
                 barsContainer.appendChild(el);
             });
             
-            document.getElementById('gantt-body').style.height = `${Math.max(tasks.length * ROW_HEIGHT + 100, 400)}px`;
+            document.getElementById('gantt-body').style.height = `${Math.max(displayRows.length * ROW_HEIGHT + 100, 400)}px`;
+            syncGanttScroll(listEl);
         }
         function setupHorizontalMove(element, task, taskIndex, tasks, countWknds) {
             element.addEventListener('mousedown', (e) => {
@@ -3941,6 +4191,8 @@ async function startOnlineTracker() {
                 document.addEventListener('mousemove', onMouseMove); document.addEventListener('mouseup', onMouseUp);
             });
         }
+        document.getElementById('task-list').addEventListener('scroll', event => syncGanttScroll(event.currentTarget));
+        document.getElementById('gantt-scroll').addEventListener('scroll', event => syncGanttScroll(event.currentTarget));
         initResizers();
         render();
         startOnlineTracker();
