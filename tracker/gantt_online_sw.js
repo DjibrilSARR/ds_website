@@ -1,7 +1,7 @@
 'use strict';
 
 const CACHE_PREFIX = 'project-tracker-online:' + self.registration.scope + ':';
-const BUNDLE_SHA256 = 'e0e46d2984e37204dd05d2dba347f802d2a833a5c5f81a55c30cb3b4e69effec';
+const BUNDLE_SHA256 = '19528fc961229c3e08416e6cba435d450a9541822bc3f3108cc9c2c11ef13dac';
 const CACHE_NAME = CACHE_PREFIX + BUNDLE_SHA256;
 const APP_ROOT = new URL('./', self.location.href);
 const INDEX_URL = new URL('index.html', APP_ROOT).href;
