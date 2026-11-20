@@ -1,25 +1,30 @@
 'use strict';
 
 const CACHE_PREFIX = 'project-tracker-online:' + self.registration.scope + ':';
-const BUNDLE_SHA256 = '19528fc961229c3e08416e6cba435d450a9541822bc3f3108cc9c2c11ef13dac';
-const CACHE_NAME = CACHE_PREFIX + BUNDLE_SHA256;
+const CACHE_NAME = CACHE_PREFIX + 'network-first-v1';
 const APP_ROOT = new URL('./', self.location.href);
 const INDEX_URL = new URL('index.html', APP_ROOT).href;
 const PAGE_URLS = [APP_ROOT.href, INDEX_URL, new URL('gantt_online.html', APP_ROOT).href];
 
-async function cacheBundle(cache) {
+let cacheWriteError = '';
+
+async function downloadPage() {
     const response = await fetch(new Request(INDEX_URL, {
-        cache: 'reload', credentials: 'omit', redirect: 'error'
+        cache: 'no-store', credentials: 'omit', redirect: 'error'
     }));
     if (!response.ok) throw new Error('The offline application could not be downloaded: HTTP ' + response.status);
-    const digest = await crypto.subtle.digest('SHA-256', await response.clone().arrayBuffer());
-    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    if (hash !== BUNDLE_SHA256) throw new Error('The application and offline worker versions do not match. Deploy both files together.');
-    await cache.put(INDEX_URL, response);
+    if (!(response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+        throw new Error('The application URL did not return an HTML page.');
+    }
+    return response;
 }
 
 self.addEventListener('install', event => {
-    event.waitUntil(caches.open(CACHE_NAME).then(cacheBundle));
+    event.waitUntil((async () => {
+        const response = await downloadPage();
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(INDEX_URL, response);
+    })());
 });
 
 self.addEventListener('activate', event => {
@@ -32,6 +37,17 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('message', event => {
     if (event.data && event.data.type === 'ACTIVATE_UPDATE') self.skipWaiting();
+    if (event.data && event.data.type === 'CHECK_OFFLINE_CACHE' && event.source) {
+        event.waitUntil((async () => {
+            try {
+                const cache = await caches.open(CACHE_NAME);
+                event.source.postMessage({ type: 'OFFLINE_CACHE_STATUS', available: !!await cache.match(INDEX_URL), error: cacheWriteError });
+            } catch (error) {
+                console.error('Tracker offline cache:', error);
+                event.source.postMessage({ type: 'OFFLINE_CACHE_STATUS', available: false, error: 'The browser could not access its offline application cache.' });
+            }
+        })());
+    }
 });
 
 self.addEventListener('fetch', event => {
@@ -40,10 +56,24 @@ self.addEventListener('fetch', event => {
     url.search = ''; url.hash = '';
     if (event.request.method !== 'GET' || !PAGE_URLS.includes(url.href)) return;
     event.respondWith((async () => {
-        const cache = await caches.open(CACHE_NAME);
-        const saved = await cache.match(INDEX_URL);
-        if (saved) return saved;
-        await cacheBundle(cache);
-        return cache.match(INDEX_URL);
+        let response;
+        try {
+            response = await downloadPage();
+        } catch (error) {
+            console.warn('Tracker page could not be refreshed; trying its last offline copy.', error);
+            const cache = await caches.open(CACHE_NAME);
+            const saved = await cache.match(INDEX_URL);
+            if (saved) return saved;
+            throw error;
+        }
+        try {
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(INDEX_URL, response.clone());
+            cacheWriteError = '';
+        } catch (error) {
+            cacheWriteError = 'This page is available online, but its latest offline copy could not be saved. Check browser storage and reopen while online.';
+            console.error('Tracker offline cache:', error);
+        }
+        return response;
     })());
 });
