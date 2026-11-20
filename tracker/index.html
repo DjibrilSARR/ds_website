@@ -1393,12 +1393,6 @@ function updateOnlineLocalFileButton() {
     const label = document.createElement('span');
     label.textContent = 'Auto-save to JSON file: ' + (entry ? 'ON' : 'OFF');
     button.replaceChildren(label);
-    if (entry) {
-        const filename = document.createElement('span');
-        filename.className = 'json-file-name';
-        filename.textContent = entry.handle.name || 'Linked JSON file';
-        button.appendChild(filename);
-    }
     button.title = entry
         ? 'Automatically writing this profile to "' + (entry.handle.name || 'its linked JSON file') + '". Click to stop writing. GitHub sync stays connected. Re-enable this file link after reopening.'
         : 'Automatically write this profile to a JSON file on this device (Chrome / Edge). This is separate from GitHub sync; it does not import file changes.';
@@ -1645,10 +1639,20 @@ async function startOnlineTracker() {
         .task-hidden-count { margin-left: 6px; font-size: 10px; font-weight: normal; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
         .json-file-button { max-width: 250px; text-align: left; }
         .json-file-button > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .json-file-button .json-file-name { margin-top: 2px; font-size: 10px; font-weight: normal; }
         .toolbar-menu > summary { list-style: none; cursor: pointer; }
         .toolbar-menu > summary::-webkit-details-marker { display: none; }
         .toolbar-menu button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .toolbar-view-control {
+            display: inline-flex; align-items: center; height: 28px; padding: 6px 28px 6px 12px;
+            background-color: #374151; color: #fff; border: 0; border-radius: 4px;
+            font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%23fff' d='M0 0h8L4 5z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center; background-size: 8px 5px;
+        }
+        .toolbar-view-control:hover { background-color: #4b5563; }
+        .toolbar-view-control:focus-visible { outline: 1px solid #e5e7eb; outline-offset: 2px; }
+        select.toolbar-view-control { appearance: none; }
+        #subtasks-menu > div { width: max-content; max-width: calc(100vw - 24px); }
         .help-storage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
         .help-storage-table th, .help-storage-table td { border: 1px solid #4b5563; padding: 8px; text-align: left; vertical-align: top; }
         .help-storage-table th { color: #fff; background: #111827; }
@@ -1662,7 +1666,8 @@ async function startOnlineTracker() {
         .toolbar-brand { margin-right: 8px; font-size: 18px; font-weight: 700; white-space: nowrap; }
         #profile-select { min-width: 0; max-width: 160px; }
         .toolbar-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        #toolbar-project-controls { flex: 1; min-width: 480px; gap: 8px; }
+        #toolbar-project-controls { flex: 1; min-width: max-content; gap: 8px; }
+        #view-toggle { flex-shrink: 0; }
         #current-project-title { min-width: 0; max-width: 160px; overflow: hidden; }
         #current-project-title > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .toolbar-actions { margin-left: auto; flex-shrink: 0; }
@@ -1697,24 +1702,24 @@ async function startOnlineTracker() {
                 <svg class="icon-svg text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                 <input type="date" id="project-start-date" class="bg-transparent text-gray-300 text-xs outline-none cursor-pointer" onchange="updateProjectDate(this.value)" aria-label="Project start date">
             </div>
-            <div class="flex items-center bg-gray-900 px-2 py-1 rounded border border-gray-600" id="zoom-controls" style="display:none;">
-                <select id="zoom-select" onchange="setZoomLevel(this.value)" class="bg-transparent text-xs text-gray-300 outline-none cursor-pointer font-semibold" aria-label="Gantt zoom">
+            <div class="flex items-center" id="zoom-controls" style="display:none;">
+                <select id="zoom-select" onchange="setZoomLevel(this.value)" class="toolbar-view-control" aria-label="Gantt zoom">
                     <option value="day">Day View</option>
                     <option value="week">Week View</option>
                     <option value="month">Month View</option>
                 </select>
             </div>
+            <details id="subtasks-menu" class="relative toolbar-menu hidden">
+                <summary class="toolbar-view-control" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks</summary>
+                <div class="absolute right-0 top-full mt-2 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1">
+                    <button id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left whitespace-nowrap">Collapse all subtasks</button>
+                    <button id="expand-all-subtasks" onclick="setAllTaskBranches(false)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left whitespace-nowrap">Expand all subtasks</button>
+                </div>
+            </details>
             <div class="flex bg-gray-900 rounded border border-gray-600 overflow-hidden" id="view-toggle" style="display:none;">
                 <button onclick="setViewMode('gantt')" id="btn-view-gantt" class="px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white transition-colors">Gantt</button>
                 <button onclick="setViewMode('summary')" id="btn-view-summary" class="px-3 py-1.5 text-xs font-semibold text-gray-400 hover:bg-gray-700 hover:text-white transition-colors">Summary</button>
             </div>
-            <details id="subtasks-menu" class="relative toolbar-menu hidden">
-                <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold whitespace-nowrap" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks &#9662;</summary>
-                <div class="absolute right-0 top-full mt-2 w-56 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1">
-                    <button id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Collapse all subtasks</button>
-                    <button id="expand-all-subtasks" onclick="setAllTaskBranches(false)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Expand all subtasks</button>
-                </div>
-            </details>
         </div>
         <div class="toolbar-actions">
             <span id="online-status" class="px-3 py-1.5 rounded text-xs font-semibold bg-gray-900 text-gray-300 whitespace-nowrap" role="status" aria-live="polite">Starting...</span>
@@ -1723,7 +1728,7 @@ async function startOnlineTracker() {
             <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs">Recovery</button>
             <button id="online-update-button" onclick="applyOnlineUpdate()" class="hidden px-3 py-1.5 bg-blue-700 rounded text-xs">Update ready</button>
             <details id="backup-menu" class="relative toolbar-menu">
-                <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1.5" title="Backups and project exports">
+                <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1.5" title="Backups and current-view exports">
                     <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></svg>
                     Backups
                     <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
@@ -1734,7 +1739,7 @@ async function startOnlineTracker() {
                     <button onclick="exportAllOnlineProfiles()" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Backup all profiles</button>
                     <div class="h-px bg-gray-700 my-1" id="export-divider" style="display:none;"></div>
                     <button onclick="exportToPDF()" id="btn-export-pdf" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left hidden">Export PDF report</button>
-                    <button onclick="exportToImage()" id="btn-export-img" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left hidden">Export Gantt image</button>
+                    <button onclick="exportToImage()" id="btn-export-img" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left hidden">Export image</button>
                 </div>
             </details>
             <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
@@ -1944,7 +1949,7 @@ async function startOnlineTracker() {
                 <ol class="list-decimal list-inside mb-4 pl-4">
                     <li>Click <b>Auto-save to JSON file: OFF</b> in the main header.</li>
                     <li>Your browser will prompt you to create or link a file (e.g., <b>My_Tracker_Live.json</b>).</li>
-                    <li>Once enabled, the button shows <b>ON</b> and the filename. Saved changes in this profile are written there. Click again to stop; neither linking nor a write failure disconnects GitHub.</li>
+                    <li>Once enabled, the button shows <b>ON</b>; hover over it to see the linked filename. Saved changes in this profile are written there. Click again to stop; neither linking nor a write failure disconnects GitHub.</li>
                     <li>Re-enable the link after reopening. The file remains on disk. This is one-way writing: external file edits are not read back. Import any existing file contents you need before choosing that file for automatic writing.</li>
                 </ol>
                 <h3 class="text-lg font-bold text-white mb-2">D. Manual Backups (Import / Export)</h3>
@@ -1958,14 +1963,14 @@ async function startOnlineTracker() {
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">5. Exporting Assets</h2>
                 <p class="mb-2">Generate instant stakeholder reports from the top-right header toolbar:</p>
                 <ul>
-                    <li><b>Gantt PNG image:</b> Use <b>Backups &gt; Export Gantt image</b> in Gantt view. It includes the displayed branches, not collapsed descendants, across the rendered rows rather than just the scroll viewport.</li>
+                    <li><b>Gantt PNG image:</b> Use <b>Backups &gt; Export image</b> in Gantt view. It includes the displayed branches, not collapsed descendants, across the rendered rows rather than just the scroll viewport.</li>
                     <li><b>PDF report:</b> Available from Backups in Gantt and Summary. It always includes every task, all notes and a fully expanded Gantt chart, regardless of folding. Your local collapsed view is restored after export.</li>
                     <li><b>Summary Copy:</b> Copies the currently displayed summary branches. Use PDF or JSON when you need all hidden descendants as well.</li>
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">6. To Do List</h2>
                 <p class="mb-4">Click <b>To Do</b> in the sidebar to open a simple day-by-day checklist. It is completely separate from your Gantt schedules and never affects your project tasks.</p>
-                <p class="mb-4"><b>Export:</b> The To Do header's <b>Export</b> menu downloads a print-friendly <b>PDF</b> or a <b>PNG image</b>. Both include the selected day and the Overdue section as shown, with completed items, reminder times and project tags, but without editing controls or navigation. This is not an all-dates export; unsaved add-item text is not included. Calendar .ics exports below remain available.</p>
+                <p class="mb-4"><b>Export:</b> In To Do view, use <b>Backups &gt; Export PDF report</b> or <b>Backups &gt; Export image</b>, below the same separator used for project exports. Both include the selected day and the Overdue section as shown, with completed items, reminder times and project tags, but without editing controls or navigation. This is not an all-dates export; unsaved add-item text is not included. Calendar .ics exports below remain available.</p>
                 <h3 class="text-lg font-bold text-white mb-2">Adding &amp; Completing Items</h3>
                 <ul>
                     <li><b>Add:</b> Type in the box at the bottom and press <b>Enter</b>. The cursor stays put so you can add several items in a row.</li>
@@ -2271,6 +2276,7 @@ async function startOnlineTracker() {
         }
 
         async function exportToImage() {
+            if (activeProjectId === 'todo') return exportTodo('png');
             if (!beginOnlineExport('Generating Gantt Image...')) return;
             try {
                 await new Promise(r => setTimeout(r, 100)); 
@@ -2292,6 +2298,7 @@ async function startOnlineTracker() {
         }
 
         async function exportToPDF() {
+            if (activeProjectId === 'todo') return exportTodo('pdf');
             if (!beginOnlineExport('Generating PDF Report...')) return;
             try {
                 const project = data.projects.find(p => p.id === activeProjectId);
@@ -3473,13 +3480,6 @@ async function startOnlineTracker() {
             <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
                 <h2 class="text-3xl font-extrabold text-white">To Do</h2>
                 <div class="flex items-center gap-2 flex-wrap">
-                    <details id="todo-export-menu" class="relative toolbar-menu">
-                        <summary class="px-3 h-9 bg-gray-800 border border-gray-700 hover:bg-gray-700 rounded text-xs font-bold flex items-center" title="Export this day and the overdue section">Export &#9662;</summary>
-                        <div class="absolute left-0 top-full mt-2 w-56 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1" style="z-index:30;">
-                            <button onclick="exportTodo('pdf')" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Export To Do PDF</button>
-                            <button onclick="exportTodo('png')" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Export To Do PNG image</button>
-                        </div>
-                    </details>
                     <button onclick="toggleTodoSound()" class="w-9 h-9 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 flex items-center justify-center ${todoSoundOn() ? 'text-blue-400' : 'text-gray-600'}" title="${todoSoundOn() ? 'Reminder sound is on' : 'Reminder sound is off'}">${todoSoundOn() ? svgSoundOn : svgSoundOff}</button>
                     <label class="flex items-center gap-1.5 h-9 px-2 rounded bg-gray-800 border border-gray-700 cursor-pointer" title="Daily wrap-up: at this time you get one reminder listing everything still open, whether or not it has its own time. Clear the box to switch it off.">
                         <span class="text-[10px] font-bold uppercase tracking-wider ${todoDigestTime() ? 'text-blue-400' : 'text-gray-600'}">Wrap-up</span>
@@ -3804,9 +3804,9 @@ async function startOnlineTracker() {
                 document.getElementById('date-picker-container').style.display = 'none';
                 document.getElementById('zoom-controls').style.display = 'none';
                 document.getElementById('current-project-title').innerHTML = "";
-                btnExportPdf.classList.add('hidden');
-                btnExportImg.classList.add('hidden');
-                exportDivider.style.display = 'none';
+                btnExportPdf.classList.remove('hidden');
+                btnExportImg.classList.remove('hidden');
+                exportDivider.style.display = 'block';
                 document.getElementById('todo-view').style.display = 'block';
                 renderTodoView();
                 return;
