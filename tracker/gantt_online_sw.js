@@ -1,20 +1,25 @@
 'use strict';
 
 const CACHE_PREFIX = 'project-tracker-online:' + self.registration.scope + ':';
-const CACHE_NAME = CACHE_PREFIX + '2026-11-15-3';
-const FILES = [
-    'gantt_online.html',
-    'online_assets/tracker.css',
-    'online_assets/purify.min.js',
-    'online_assets/html2canvas.min.js',
-    'online_assets/html2pdf.bundle.min.js',
-    'online_assets/online-sync.js',
-    'online_assets/online-ui.js'
-].map(path => new URL(path, self.location.href).href);
+const BUNDLE_SHA256 = 'e0e46d2984e37204dd05d2dba347f802d2a833a5c5f81a55c30cb3b4e69effec';
+const CACHE_NAME = CACHE_PREFIX + BUNDLE_SHA256;
+const APP_ROOT = new URL('./', self.location.href);
+const INDEX_URL = new URL('index.html', APP_ROOT).href;
+const PAGE_URLS = [APP_ROOT.href, INDEX_URL, new URL('gantt_online.html', APP_ROOT).href];
+
+async function cacheBundle(cache) {
+    const response = await fetch(new Request(INDEX_URL, {
+        cache: 'reload', credentials: 'omit', redirect: 'error'
+    }));
+    if (!response.ok) throw new Error('The offline application could not be downloaded: HTTP ' + response.status);
+    const digest = await crypto.subtle.digest('SHA-256', await response.clone().arrayBuffer());
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    if (hash !== BUNDLE_SHA256) throw new Error('The application and offline worker versions do not match. Deploy both files together.');
+    await cache.put(INDEX_URL, response);
+}
 
 self.addEventListener('install', event => {
-    event.waitUntil(caches.open(CACHE_NAME).then(cache =>
-        cache.addAll(FILES.map(url => new Request(url, { cache: 'reload' })))));
+    event.waitUntil(caches.open(CACHE_NAME).then(cacheBundle));
 });
 
 self.addEventListener('activate', event => {
@@ -30,16 +35,15 @@ self.addEventListener('message', event => {
 });
 
 self.addEventListener('fetch', event => {
-    // Only public app files are cached, never authenticated GitHub requests or JSON data.
+    // Both entry URLs use the same public document; API responses and data are never cached.
     const url = new URL(event.request.url);
     url.search = ''; url.hash = '';
-    if (event.request.method !== 'GET' || !FILES.includes(url.href)) return;
+    if (event.request.method !== 'GET' || !PAGE_URLS.includes(url.href)) return;
     event.respondWith((async () => {
         const cache = await caches.open(CACHE_NAME);
-        const saved = await cache.match(url.href);
+        const saved = await cache.match(INDEX_URL);
         if (saved) return saved;
-        const response = await fetch(event.request);
-        if (response.ok) await cache.put(url.href, response.clone());
-        return response;
+        await cacheBundle(cache);
+        return cache.match(INDEX_URL);
     })());
 });
