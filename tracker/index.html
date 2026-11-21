@@ -980,6 +980,37 @@ function applyOnlineProfile(change) {
     renderOnlineToolbar(onlineStore.status());
 }
 
+function onlineStatusIcon(status) {
+    const paths = {
+        synced: ['M17 17h1a4 4 0 0 0 .42-7.98 6.5 6.5 0 0 0-12.62-1.3A4.75 4.75 0 0 0 6 17', 'm8 16 3 3 5-6'],
+        sync: ['M20 7v5h-5M4 17v-5h5', 'M6 7a7 7 0 0 1 11.55-2L20 8M4 16l2.45 3A7 7 0 0 0 18 17'],
+        warning: ['m10.3 3.7-8.5 14.7a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z', 'M12 9v4m0 4h.01'],
+        offline: ['M3 3 21 21M6 17H5a4 4 0 0 1-.7-7.94M9 4a6.5 6.5 0 0 1 9.42 5.02A4 4 0 0 1 20 16', 'M9 17h7'],
+        cloud: ['M20 16.6A4 4 0 0 0 18.4 9 6.5 6.5 0 0 0 5.8 7.7 4.75 4.75 0 0 0 6 17h12'],
+        file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', 'M14 2v6h6m-12 7 3 3 5-6']
+    };
+    const name = status.error || status.blocked || status.conflicts.length ? 'warning' :
+        status.label === 'Synced' ? 'synced' : status.label === 'Syncing...' ? 'sync' :
+        status.label === 'Offline - saved locally' ? 'offline' : status.config ? 'cloud' : 'file';
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.8');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    svg.setAttribute('data-status-icon', name);
+    if (name === 'sync') svg.classList.add('toolbar-sync-icon');
+    for (const d of paths[name]) {
+        const path = document.createElementNS(svg.namespaceURI, 'path');
+        path.setAttribute('d', d);
+        svg.append(path);
+    }
+    return svg;
+}
+
 function renderOnlineToolbar(status) {
     const select = document.getElementById('profile-select');
     if (!select) return;
@@ -1005,6 +1036,7 @@ function renderOnlineToolbar(status) {
         onlineProfileOptions = signature;
     }
     select.value = onlineStore.state.activeProfileId;
+    select.title = onlineStore.current().name;
     select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing || onlineExporting;
     const actionable = status.blocked || status.conflicts.length > 0;
     let badge = document.getElementById('online-status');
@@ -1018,13 +1050,18 @@ function renderOnlineToolbar(status) {
         if (focused) document.getElementById('github-connect-button').focus();
     }
     if (actionable) badge.disabled = onlineFileChoosing;
-    badge.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
-    badge.className = 'px-3 py-1.5 rounded text-xs font-semibold whitespace-nowrap ' +
-        (status.error || status.conflicts.length ? 'bg-amber-900 text-amber-200' :
-            status.label === 'Synced' ? 'bg-green-900 text-green-300' : 'bg-gray-900 text-gray-300');
+    const label = document.createElement('span');
+    label.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
+    badge.replaceChildren(onlineStatusIcon(status), label);
+    badge.className = 'toolbar-action toolbar-status ' +
+        (status.error || status.conflicts.length ? 'toolbar-status-attention' :
+            status.label === 'Synced' ? 'toolbar-status-synced' : 'toolbar-status-neutral');
     badge.title = actionable ? 'Click to review the issue.' : 'Save status' +
         (status.config ? ': ' + status.config.owner + '/' + status.config.repo + ' - ' + status.config.branch : ': local browser workspace');
-    document.getElementById('github-connect-button').textContent = status.connected ? 'GitHub settings' : 'Connect GitHub';
+    const githubButton = document.getElementById('github-connect-button');
+    const githubLabel = document.getElementById('github-connect-label');
+    githubLabel.textContent = status.connected ? 'GitHub settings' : 'Connect GitHub';
+    githubButton.replaceChildren(githubButton.querySelector('svg'), githubLabel);
     document.getElementById('online-retry').classList.toggle('hidden', !status.error || !status.connected || status.blocked);
     document.getElementById('online-recovery-button').classList.toggle('hidden', onlineStore.state.recovery.length === 0);
     const message = document.getElementById('online-message');
@@ -1390,13 +1427,13 @@ function updateOnlineLocalFileButton() {
     const button = document.getElementById('btn-sync');
     if (!button) return;
     const entry = onlineFileLinks.get(onlineLinkKey(onlineStore.current().id));
-    const label = document.createElement('span');
+    const label = document.getElementById('json-file-label');
     label.textContent = 'Auto-save to JSON file: ' + (entry ? 'ON' : 'OFF');
-    button.replaceChildren(label);
+    button.replaceChildren(button.querySelector('svg'), label);
     button.title = entry
         ? 'Automatically writing this profile to "' + (entry.handle.name || 'its linked JSON file') + '". Click to stop writing. GitHub sync stays connected. Re-enable this file link after reopening.'
         : 'Automatically write this profile to a JSON file on this device (Chrome / Edge). This is separate from GitHub sync; it does not import file changes.';
-    button.className = 'json-file-button px-3 py-1.5 rounded text-xs font-semibold ' + (entry ? 'bg-green-700 hover:bg-green-600' : 'bg-indigo-600 hover:bg-indigo-500');
+    button.className = 'toolbar-action json-file-button ' + (entry ? 'toolbar-json-on' : 'toolbar-json-off');
 }
 
 function beginOnlineExport(title) {
@@ -1540,9 +1577,25 @@ async function startOnlineTracker() {
         });
     });
     document.addEventListener('keydown', event => {
+        const menu = event.target instanceof Element ? event.target.closest('.toolbar-menu') : null;
+        if (menu && !event.ctrlKey && !event.altKey && !event.metaKey &&
+            ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            document.querySelectorAll('.toolbar-menu[open]').forEach(other => { if (other !== menu) other.open = false; });
+            menu.open = true;
+            const buttons = Array.from(menu.querySelectorAll(':scope > div > button:not(:disabled)'))
+                .filter(button => button.getClientRects().length);
+            if (buttons.length) {
+                const current = buttons.indexOf(document.activeElement);
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 :
+                    current < 0 ? (event.key === 'ArrowDown' ? 0 : buttons.length - 1) :
+                    (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+                buttons[next].focus({ preventScroll: true });
+            }
+            event.preventDefault();
+        }
         if (event.key === 'Escape') {
-            const menu = document.querySelector('.toolbar-menu[open]');
-            if (menu) { menu.open = false; menu.querySelector('summary').focus(); }
+            const openMenu = document.querySelector('.toolbar-menu[open]');
+            if (openMenu) { openMenu.open = false; openMenu.querySelector('summary').focus(); }
         }
         if (event.key === 'Escape') {
             if (!document.getElementById('profile-import-modal').classList.contains('hidden')) closeOnlineImport();
@@ -1637,53 +1690,117 @@ async function startOnlineTracker() {
         .task-fold-toggle { height: 24px; display: inline-flex; align-items: center; justify-content: center; color: #9ca3af; border-radius: 4px; }
         .task-fold-toggle:hover, .task-fold-toggle:focus-visible { color: #fff; background: #374151; }
         .task-hidden-count { margin-left: 6px; font-size: 10px; font-weight: normal; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
-        .json-file-button { max-width: 250px; text-align: left; }
+        .json-file-button { min-width: 0; max-width: 250px; text-align: left; }
         .json-file-button > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .toolbar-menu > summary { list-style: none; cursor: pointer; }
         .toolbar-menu > summary::-webkit-details-marker { display: none; }
+        .toolbar-menu[open] { z-index: 30; }
         .toolbar-menu button:disabled { opacity: 0.5; cursor: not-allowed; }
         .toolbar-view-control {
-            display: inline-flex; align-items: center; height: 28px; padding: 6px 28px 6px 12px;
-            background-color: #374151; color: #fff; border: 0; border-radius: 4px;
+            display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+            height: 28px; padding: 0 10px; background: #374151; color: #f9fafb;
+            border: 1px solid #586577; border-radius: 4px;
             font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; cursor: pointer;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%23fff' d='M0 0h8L4 5z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat; background-position: right 12px center; background-size: 8px 5px;
         }
-        .toolbar-view-control:hover { background-color: #4b5563; }
+        .toolbar-view-control::after {
+            content: ""; width: 8px; height: 5px; background: currentColor;
+            clip-path: polygon(0 0, 100% 0, 50% 100%);
+        }
+        .toolbar-view-control:hover, .toolbar-menu[open] > .toolbar-view-control { background: #465265; }
         .toolbar-view-control:focus-visible { outline: 1px solid #e5e7eb; outline-offset: 2px; }
-        select.toolbar-view-control { appearance: none; }
-        #subtasks-menu > div { width: max-content; max-width: calc(100vw - 24px); }
+        .toolbar-menu-panel {
+            position: absolute; top: 100%; left: 0; width: max-content; min-width: 100%;
+            max-width: calc(100vw - 24px); margin-top: 7px; padding: 5px;
+            display: flex; flex-direction: column; gap: 3px;
+            background: #111827; border: 1px solid #586577; border-radius: 6px;
+            box-shadow: 0 12px 28px #0006;
+        }
+        .toolbar-menu-panel > button {
+            min-height: 30px; padding: 7px 11px; border: 0; border-radius: 4px;
+            background: transparent; color: #f3f4f6; font-size: 12px; line-height: 16px;
+            font-weight: 500; text-align: left; white-space: nowrap; cursor: pointer;
+        }
+        .toolbar-menu-panel > button:hover, .toolbar-menu-panel > button[aria-checked="true"] { background: #374151; }
+        .toolbar-menu-panel > button:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+        .toolbar-menu-panel > button:disabled { opacity: 0.45; cursor: not-allowed; background: transparent; }
         .help-storage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
         .help-storage-table th, .help-storage-table td { border: 1px solid #4b5563; padding: 8px; text-align: left; vertical-align: top; }
         .help-storage-table th { color: #fff; background: #111827; }
         #app-toolbar {
-            min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+            min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
             padding: 8px 16px; flex-shrink: 0; background: #1f2937; border-bottom: 1px solid #374151;
             position: relative; z-index: 40;
         }
         #toolbar-profiles, #toolbar-project-controls, .toolbar-actions { display: flex; align-items: center; gap: 6px; }
         #toolbar-profiles { min-width: 0; }
-        .toolbar-brand { margin-right: 8px; font-size: 18px; font-weight: 700; white-space: nowrap; }
-        #profile-select { min-width: 0; max-width: 160px; }
+        .toolbar-brand { margin-right: 4px; font-size: 18px; font-weight: 700; white-space: nowrap; }
+        #profile-select { min-width: 0; max-width: 125px; height: 28px; padding-top: 0; padding-bottom: 0; }
         .toolbar-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        #toolbar-project-controls { flex: 1; min-width: max-content; gap: 8px; }
+        #toolbar-project-controls { flex: 1; min-width: max-content; gap: 6px; }
         #view-toggle { flex-shrink: 0; }
-        #current-project-title { min-width: 0; max-width: 160px; overflow: hidden; }
-        #current-project-title > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .toolbar-actions { margin-left: auto; flex-shrink: 0; }
+        #date-picker-container, #view-toggle { height: 28px; }
+        #view-toggle button { padding-top: 0; padding-bottom: 0; }
+        #current-project-title {
+            min-width: 0; max-width: 190px; overflow: hidden; padding: 4px 7px;
+            border-left: 2px solid #60a5fa; border-radius: 4px; background: #253851;
+            color: #dbeafe; font-size: 15px; line-height: 20px; font-weight: 700;
+        }
+        #current-project-title > span { display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+        .toolbar-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .toolbar-project-details { display: inline-flex; flex-shrink: 0; color: #93b8e3; }
+        .toolbar-project-details .icon-svg { width: 12px; height: 12px; }
+        .toolbar-actions { margin-left: auto; flex-shrink: 0; flex-wrap: wrap; max-width: 100%; gap: 8px 0; }
+        .toolbar-action-group { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+        #toolbar-local-controls { gap: 8px; }
+        .toolbar-separator { width: 1px; height: 18px; margin: 0 5px; background: #536074; opacity: 0.8; flex-shrink: 0; }
+        .toolbar-action {
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px;
+            background: #374151; color: #f3f4f6; font-size: 12px; line-height: 16px;
+            font-weight: 600; white-space: nowrap;
+        }
+        .toolbar-action:hover { background: #465265; }
+        .toolbar-action.hidden { display: none; }
+        .toolbar-action:focus-visible { outline: 1px solid #e5e7eb; outline-offset: 2px; }
+        .toolbar-action svg { width: 14px; height: 14px; flex-shrink: 0; }
+        .toolbar-status { cursor: default; }
+        button.toolbar-status { cursor: pointer; }
+        .toolbar-status-neutral, .toolbar-status-neutral:hover { background: #111827; color: #d1d5db; }
+        .toolbar-status-synced, .toolbar-status-synced:hover { border-color: #22694b; background: #153b2d; color: #86efac; }
+        .toolbar-status-attention, .toolbar-status-attention:hover { background: #78350f; color: #fde68a; }
+        .toolbar-sync-icon { transform-origin: center; animation: toolbar-sync-spin 1.4s linear infinite; }
+        @keyframes toolbar-sync-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .toolbar-sync-icon { animation: none; } }
+        #btn-sync.toolbar-json-on { border-color: #22784d; background: #17713c; color: #f0fdf4; }
+        #btn-sync.toolbar-json-on:hover { background: #1b8145; }
+        #btn-sync.toolbar-json-off { background: #4f46e5; color: #fff; }
+        #btn-sync.toolbar-json-off:hover { background: #6366f1; }
+        #online-retry { background: #b45309; }
+        #online-update-button { margin-left: 8px; background: #1d4ed8; }
+        #toolbar-help-button { width: 28px; padding: 0; border-radius: 50%; }
+        #toolbar-help-button svg { width: 18px; height: 18px; }
         .toolbar-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
         #backup-menu > summary { list-style: none; cursor: pointer; }
         #backup-menu > summary::-webkit-details-marker { display: none; }
-        #offline-cache-state { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #6b7280; font-size: 0; }
+        #backup-menu > .toolbar-menu-panel { min-width: 224px; }
+        #offline-cache-state { display: block; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #6b7280; font-size: 0; }
         @media (max-width: 700px) {
             #app-toolbar { padding: 8px 12px; }
             #toolbar-profiles { width: 100%; }
             .toolbar-brand { font-size: 16px; }
+            #current-project-title { font-size: 14px; }
             #profile-select { max-width: 130px; }
             #toolbar-project-controls { min-width: 0; flex-wrap: wrap; flex-basis: 100%; }
-            .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
-            #backup-menu, #subtasks-menu { position: static; }
-            #backup-menu > div, #subtasks-menu > div { right: 12px; }
+            .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; gap: 6px; }
+            .toolbar-action-group { display: contents; }
+            #toolbar-local-controls { display: flex; max-width: 100%; }
+            .toolbar-separator { display: none; }
+            #online-update-button { margin-left: 0; }
+            #backup-menu, #subtasks-menu, #zoom-menu { position: static; }
+            #backup-menu > .toolbar-menu-panel, #subtasks-menu > .toolbar-menu-panel, #zoom-menu > .toolbar-menu-panel {
+                left: auto; right: 12px; min-width: 0;
+            }
+            #backup-menu > .toolbar-menu-panel { width: 224px; }
         }
     </style>
 </head>
@@ -1697,23 +1814,26 @@ async function startOnlineTracker() {
             </button>
         </div>
         <div id="toolbar-project-controls" style="display:none;" inert>
-            <h2 id="current-project-title" class="font-semibold text-gray-200 text-xs"></h2>
+            <h2 id="current-project-title"></h2>
             <div class="flex items-center gap-2 bg-gray-900 px-2 py-1 rounded border border-gray-600" id="date-picker-container" style="display:none;" title="Project Start Date">
                 <svg class="icon-svg text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                 <input type="date" id="project-start-date" class="bg-transparent text-gray-300 text-xs outline-none cursor-pointer" onchange="updateProjectDate(this.value)" aria-label="Project start date">
             </div>
             <div class="flex items-center" id="zoom-controls" style="display:none;">
-                <select id="zoom-select" onchange="setZoomLevel(this.value)" class="toolbar-view-control" aria-label="Gantt zoom">
-                    <option value="day">Day View</option>
-                    <option value="week">Week View</option>
-                    <option value="month">Month View</option>
-                </select>
+                <details id="zoom-menu" class="relative toolbar-menu">
+                    <summary class="toolbar-view-control" aria-haspopup="menu" aria-label="Gantt zoom"><span id="zoom-label">Day View</span></summary>
+                    <div class="toolbar-menu-panel" role="menu" aria-label="Gantt zoom">
+                        <button type="button" data-zoom="day" onclick="selectToolbarZoom('day')" role="menuitemradio" aria-checked="true">Day View</button>
+                        <button type="button" data-zoom="week" onclick="selectToolbarZoom('week')" role="menuitemradio" aria-checked="false">Week View</button>
+                        <button type="button" data-zoom="month" onclick="selectToolbarZoom('month')" role="menuitemradio" aria-checked="false">Month View</button>
+                    </div>
+                </details>
             </div>
             <details id="subtasks-menu" class="relative toolbar-menu hidden">
-                <summary class="toolbar-view-control" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks</summary>
-                <div class="absolute right-0 top-full mt-2 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1">
-                    <button id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left whitespace-nowrap">Collapse all subtasks</button>
-                    <button id="expand-all-subtasks" onclick="setAllTaskBranches(false)" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left whitespace-nowrap">Expand all subtasks</button>
+                <summary class="toolbar-view-control" aria-haspopup="menu" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks</summary>
+                <div class="toolbar-menu-panel" role="menu" aria-label="Subtasks">
+                    <button type="button" id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" role="menuitem">Collapse all subtasks</button>
+                    <button type="button" id="expand-all-subtasks" onclick="setAllTaskBranches(false)" role="menuitem">Expand all subtasks</button>
                 </div>
             </details>
             <div class="flex bg-gray-900 rounded border border-gray-600 overflow-hidden" id="view-toggle" style="display:none;">
@@ -1722,32 +1842,47 @@ async function startOnlineTracker() {
             </div>
         </div>
         <div class="toolbar-actions">
-            <span id="online-status" class="px-3 py-1.5 rounded text-xs font-semibold bg-gray-900 text-gray-300 whitespace-nowrap" role="status" aria-live="polite">Starting...</span>
-            <button id="online-retry" onclick="onlineStore.retry()" class="hidden px-2.5 py-1.5 bg-amber-700 rounded text-xs">Retry sync</button>
-            <button id="github-connect-button" onclick="openGitHubModal()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-semibold whitespace-nowrap">Connect GitHub</button>
-            <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs">Recovery</button>
-            <button id="online-update-button" onclick="applyOnlineUpdate()" class="hidden px-3 py-1.5 bg-blue-700 rounded text-xs">Update ready</button>
-            <details id="backup-menu" class="relative toolbar-menu">
-                <summary class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1.5" title="Backups and current-view exports">
-                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></svg>
-                    Backups
-                    <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
-                </summary>
-                <div class="absolute right-0 top-full mt-2 w-56 p-1.5 bg-gray-900 border border-gray-600 rounded-lg shadow-xl flex flex-col gap-1">
-                    <button id="toolbar-import" onclick="triggerImport()" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Import Backup</button>
-                    <button id="toolbar-export-profile" onclick="exportData()" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Export Backup</button>
-                    <button onclick="exportAllOnlineProfiles()" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left">Backup all profiles</button>
-                    <div class="h-px bg-gray-700 my-1" id="export-divider" style="display:none;"></div>
-                    <button onclick="exportToPDF()" id="btn-export-pdf" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left hidden">Export PDF report</button>
-                    <button onclick="exportToImage()" id="btn-export-img" class="w-full px-3 py-2 hover:bg-gray-700 rounded text-xs text-left hidden">Export image</button>
-                </div>
-            </details>
-            <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
-            <button id="btn-sync" onclick="toggleAutoSave()" class="json-file-button px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold" title="Automatically write this profile to a JSON file on this device. This is separate from GitHub sync."><span>Auto-save to JSON file: OFF</span></button>
-            <button onclick="openHelpModal()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 text-white rounded-full" title="Help" aria-label="Help">
+            <div class="toolbar-action-group">
+                <details id="backup-menu" class="relative toolbar-menu">
+                    <summary class="toolbar-action" aria-haspopup="menu" title="Backups and current-view exports">
+                        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></svg>
+                        Backups
+                        <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
+                    </summary>
+                    <div class="toolbar-menu-panel" role="menu" aria-label="Backups and exports">
+                        <button id="toolbar-import" onclick="triggerImport()" role="menuitem">Import Backup</button>
+                        <button id="toolbar-export-profile" onclick="exportData()" role="menuitem">Export Backup</button>
+                        <button onclick="exportAllOnlineProfiles()" role="menuitem">Backup all profiles</button>
+                        <div class="h-px bg-gray-700 my-1" id="export-divider" role="separator" style="display:none;"></div>
+                        <button onclick="exportToPDF()" id="btn-export-pdf" class="hidden" role="menuitem">Export PDF report</button>
+                        <button onclick="exportToImage()" id="btn-export-img" class="hidden" role="menuitem">Export image</button>
+                    </div>
+                </details>
+                <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden toolbar-action">Recovery</button>
+            </div>
+            <span class="toolbar-separator" aria-hidden="true"></span>
+            <div class="toolbar-action-group">
+                <button id="github-connect-button" onclick="openGitHubModal()" class="toolbar-action">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.53v-2.07c-3.1.67-3.75-1.32-3.75-1.32-.5-1.28-1.24-1.62-1.24-1.62-1.02-.7.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.24.93.1-.72.39-1.21.71-1.49-2.47-.28-5.07-1.24-5.07-5.5 0-1.21.43-2.2 1.15-2.98-.12-.28-.5-1.4.11-2.92 0 0 .94-.3 3.05 1.14a10.6 10.6 0 0 1 5.56 0c2.12-1.44 3.05-1.14 3.05-1.14.61 1.53.23 2.64.11 2.92.72.78 1.15 1.77 1.15 2.98 0 4.27-2.6 5.21-5.08 5.49.4.35.75 1.02.75 2.06V22c0 .3.2.64.77.53A11.1 11.1 0 0 0 12 .9Z"/></svg>
+                    <span id="github-connect-label">Connect GitHub</span>
+                </button>
+                <span id="online-status" class="toolbar-action toolbar-status toolbar-status-neutral" role="status" aria-live="polite">Starting...</span>
+                <button id="online-retry" onclick="onlineStore.retry()" class="hidden toolbar-action">Retry sync</button>
+            </div>
+            <span class="toolbar-separator" aria-hidden="true"></span>
+            <div id="toolbar-local-controls" class="toolbar-action-group">
+                <button id="btn-sync" onclick="toggleAutoSave()" class="toolbar-action json-file-button toolbar-json-off" title="Automatically write this profile to a JSON file on this device. This is separate from GitHub sync.">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 11v7m-3-3 3 3 3-3"/></svg>
+                    <span id="json-file-label">Auto-save to JSON file: OFF</span>
+                </button>
+                <span id="offline-cache-state" role="status" title="Preparing offline copy"></span>
+            </div>
+            <button id="online-update-button" onclick="applyOnlineUpdate()" class="hidden toolbar-action">Update ready</button>
+            <span class="toolbar-separator" aria-hidden="true"></span>
+            <button id="toolbar-help-button" onclick="openHelpModal()" class="toolbar-action" title="Help" aria-label="Help">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
             </button>
-            <span id="offline-cache-state" role="status" title="Preparing offline copy"></span>
+            <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
         </div>
     </header>
     <div id="online-message" role="alert" class="hidden shrink-0 bg-amber-950 border-b border-amber-800 text-amber-200 px-4 py-2 text-xs"></div>
@@ -1887,7 +2022,8 @@ async function startOnlineTracker() {
                     <li><b>Another device:</b> An unchanged cached profile accepts newer cloud data automatically. If only this device changed, it uploads. If both sides changed into different versions, <b>Needs attention</b> asks what to keep; saved offline work is not silently discarded. Checks use the last-synced version, not whichever device opened last.</li>
                     <li><b>Conflict choices:</b> <b>Keep this device's version</b> uploads this copy and snapshots the previous GitHub version locally. <b>Use GitHub's version</b> snapshots this copy locally before loading the cloud version. <b>Keep both</b> keeps the cloud original and makes a separate recovered-local profile. Conflicts are per whole profile, not automatically merged task by task.</li>
                     <li><b>Busy editors:</b> Incoming replacements wait while an editor, dialog, file chooser or drag is active. <b>Cloud update waiting</b> is not an error. Finishing a local edit may require a conflict choice if GitHub also changed.</li>
-                    <li><b>Offline:</b> Wait for <b>Offline ready</b> before depending on offline reopening. Only data already cached on this browser is available offline; another device cannot receive your pending edits while this page is closed or disconnected.</li>
+                    <li><b>Toolbar groups:</b> Backups and Recovery are together; GitHub settings and its save status are together; JSON auto-save and the small offline dot are together. Help is separate. The GitHub logo opens settings, and the status SVG shows syncing or a checked cloud when synced.</li>
+                    <li><b>Offline:</b> Hover over the small dot beside JSON auto-save and wait for <b>Offline ready</b> before depending on offline reopening. The dot reports the cached application copy, not GitHub data sync or whether JSON writing is enabled. Only data already cached on this browser is available offline; another device cannot receive your pending edits while this page is closed or disconnected.</li>
                     <li><b>Privacy and recovery:</b> Browser storage is not encrypted. Scripts on the same origin can read it; a /tracker/ folder shares its origin with the main website, while a separate subdomain isolates it. Clearing site data removes local tokens, views, pending edits and recovery snapshots. Keep private backups.</li>
                     <li><b>Editing tabs:</b> One editing tab is allowed per browser origin. This does not lock a second physical device out of editing; concurrent divergent work uses the conflict choices above.</li>
                 </ul>
@@ -1900,7 +2036,7 @@ async function startOnlineTracker() {
                     <li><b>Delete:</b> Hover over the project row in the sidebar and click the <b>trash icon</b> to permanently delete it.</li>
                 </ul>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Dynamic Views</h3>
-                <p class="mb-2">Toggle between views in the top-right corner of the header toolbar:</p>
+                <p class="mb-2">Toggle between views beside the project name in the header toolbar:</p>
                 <ul>
                     <li><b>Gantt View:</b> Standard interactive timeline layout with editable columns.</li>
                     <li><b>Summary View:</b> Clean, formatted textual breakdown of all tasks with progress markers—ideal for progress presentations.</li>
@@ -1930,7 +2066,7 @@ async function startOnlineTracker() {
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">3. Interactive Gantt Timeline</h2>
                 <h3 class="text-lg font-bold text-white mb-2">Timeline Navigation</h3>
-                <p class="mb-2">Use the <b>Zoom View dropdown</b> in the header to scale your timeline between <b>Day</b>, <b>Week</b>, or <b>Month</b> views.</p>
+                <p class="mb-2">Use the <b>Day / Week / Month View</b> menu in the header to scale your timeline. It uses the same compact popup design as <b>Subtasks</b>. Within an open menu, arrow keys move between available actions, Enter chooses one, and Escape closes the menu.</p>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Drag-and-Drop Scheduling</h3>
                 <ul>
                     <li><b>Move / Reschedule:</b> Click and hold any task bar or milestone diamond, then drag it horizontally. If you drag a parent task, all of its nested children will shift in unison.</li>
@@ -2504,6 +2640,11 @@ async function startOnlineTracker() {
             TOTAL_GANTT_DAYS = zoomLevel === 'day' ? 90 : zoomLevel === 'week' ? 365 : 1095;
             writeOnlineView('zoom', zoomLevel);
             render();
+        }
+        function selectToolbarZoom(level) {
+            setZoomLevel(level);
+            document.getElementById('zoom-menu').open = false;
+            document.querySelector('#zoom-menu > summary').focus({ preventScroll: true });
         }
         function collapsedTaskIds() {
             const byProject = readOnlineView('collapsedTasks', {});
@@ -3748,8 +3889,9 @@ async function startOnlineTracker() {
             container.innerHTML = html;
         }
         function render() {
-            document.getElementById('toolbar-project-controls').style.display =
-                activeProjectId && !['overview', 'todo'].includes(activeProjectId) ? 'flex' : 'none';
+            const projectOpen = activeProjectId && !['overview', 'todo'].includes(activeProjectId);
+            document.getElementById('toolbar-project-controls').style.display = projectOpen ? 'flex' : 'none';
+            if (!projectOpen) document.getElementById('zoom-menu').open = false;
             const branchRows = taskDisplayRows(data.tasks[activeProjectId] || [], true).filter(row => row.hasChildren);
             const collapsed = collapsedTaskIds();
             const subtasksMenu = document.getElementById('subtasks-menu');
@@ -3837,12 +3979,16 @@ async function startOnlineTracker() {
             
             document.getElementById('current-project-title').innerHTML = `
                 <span class="cursor-pointer hover:text-blue-400 transition-colors flex items-center gap-2" onclick="openModal(null, 'project')" title="${TrackerOnline.escapeText(currentProject.name)} - Project Details">
-                    ${TrackerOnline.escapeText(currentProject.name)} <span class="text-gray-500 hover:text-blue-400 transition-colors">${svgDetails}</span>
+                    <span class="toolbar-project-name">${TrackerOnline.escapeText(currentProject.name)}</span>
+                    <span class="toolbar-project-details">${svgDetails}</span>
                 </span>
             `;
             
             document.getElementById('project-start-date').value = currentProject.startDate;
-            document.getElementById('zoom-select').value = zoomLevel;
+            document.getElementById('zoom-label').textContent = zoomLevel[0].toUpperCase() + zoomLevel.slice(1) + ' View';
+            document.querySelectorAll('#zoom-menu [data-zoom]').forEach(button => {
+                button.setAttribute('aria-checked', String(button.dataset.zoom === zoomLevel));
+            });
             const durHeader = document.getElementById('dur-header');
             const countWknds = currentProject.countWeekends !== false;
             
