@@ -932,8 +932,9 @@ function persistOnlineData() {
 
 function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
+    if (typeof mobileSidebarOpen !== 'undefined' && mobileSidebarOpen) return true;
     if (onlineFileChoosing || onlineExporting) return true;
-    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal']
+    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
@@ -1053,6 +1054,7 @@ function renderOnlineToolbar(status) {
     const label = document.createElement('span');
     label.textContent = status.label + (status.config && status.pending ? ' (' + status.pending + ')' : '');
     badge.replaceChildren(onlineStatusIcon(status), label);
+    badge.setAttribute('aria-label', label.textContent);
     badge.className = 'toolbar-action toolbar-status ' +
         (status.error || status.conflicts.length ? 'toolbar-status-attention' :
             status.label === 'Synced' ? 'toolbar-status-synced' : 'toolbar-status-neutral');
@@ -1062,6 +1064,7 @@ function renderOnlineToolbar(status) {
     const githubLabel = document.getElementById('github-connect-label');
     githubLabel.textContent = status.connected ? 'GitHub settings' : 'Connect GitHub';
     githubButton.replaceChildren(githubButton.querySelector('svg'), githubLabel);
+    githubButton.setAttribute('aria-label', githubLabel.textContent);
     document.getElementById('online-retry').classList.toggle('hidden', !status.error || !status.connected || status.blocked);
     document.getElementById('online-recovery-button').classList.toggle('hidden', onlineStore.state.recovery.length === 0);
     const message = document.getElementById('online-message');
@@ -1075,6 +1078,7 @@ function renderOnlineToolbar(status) {
         openOnlineConflict(conflict.id);
     }
     renderOnlineProfileManager();
+    if (typeof refreshMobileUI === 'function') refreshMobileUI();
 }
 
 function onlineAllowProfileChange(action) {
@@ -1430,9 +1434,12 @@ function updateOnlineLocalFileButton() {
     const label = document.getElementById('json-file-label');
     label.textContent = 'Auto-save to JSON file: ' + (entry ? 'ON' : 'OFF');
     button.replaceChildren(button.querySelector('svg'), label);
+    button.dataset.fileState = entry ? 'ON' : 'OFF';
+    button.setAttribute('aria-label', label.textContent);
     button.title = entry
         ? 'Automatically writing this profile to "' + (entry.handle.name || 'its linked JSON file') + '". Click to stop writing. GitHub sync stays connected. Re-enable this file link after reopening.'
-        : 'Automatically write this profile to a JSON file on this device (Chrome / Edge). This is separate from GitHub sync; it does not import file changes.';
+        : window.showSaveFilePicker ? 'Automatically write this profile to a JSON file on this device. This is separate from GitHub sync; it does not import file changes.'
+        : 'This browser does not support automatic writing to a chosen JSON file. Browser saving, GitHub sync and JSON backup downloads remain available.';
     button.className = 'toolbar-action json-file-button ' + (entry ? 'toolbar-json-on' : 'toolbar-json-off');
 }
 
@@ -1465,7 +1472,7 @@ async function toggleOnlineLocalFile() {
         if (existing.pending) await existing.pending;
         onlineFileLinks.delete(key); updateOnlineLocalFileButton(); return;
     }
-    if (!window.showSaveFilePicker) { alert('Linked local-file writing requires Chrome or Edge. JSON backup downloads still work in other browsers.'); return; }
+    if (!window.showSaveFilePicker) { alert('This browser does not support automatic writing to a chosen JSON file. Browser saving, GitHub sync and JSON backup downloads remain available.'); return; }
     onlineFileChoosing = true; renderOnlineToolbar(onlineStore.status());
     try {
         const handle = await window.showSaveFilePicker({
@@ -1515,7 +1522,11 @@ function queueOnlineLocalFile(id) {
 
 async function registerOnlineOfflineCache() {
     const badge = document.getElementById('offline-cache-state');
-    if (location.protocol === 'file:') { badge.textContent = 'Local copy'; badge.title = 'Local copy'; badge.style.backgroundColor = '#22c55e'; return; }
+    if (location.protocol === 'file:') {
+        badge.textContent = 'Local copy'; badge.title = 'Local copy'; badge.style.backgroundColor = '#22c55e';
+        if (typeof refreshMobileUI === 'function') refreshMobileUI();
+        return;
+    }
     if (!navigator.serviceWorker) {
         onlineOfflineError = 'Offline page caching is unavailable in this browser. Keep the tab open or use the downloaded local copy when offline.';
         renderOnlineToolbar(onlineStore.status()); return;
@@ -1784,6 +1795,158 @@ async function startOnlineTracker() {
         #backup-menu > summary::-webkit-details-marker { display: none; }
         #backup-menu > .toolbar-menu-panel { min-width: 224px; }
         #offline-cache-state { display: block; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #6b7280; font-size: 0; }
+        .mobile-only { display: none; }
+        #mobile-actions-modal { z-index: 106; }
+        .task-bar, .milestone, .resize-handle { touch-action: none; }
+        .mobile-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .mobile-action-grid button, .mobile-action-field button {
+            min-height: 44px; padding: 10px; border-radius: 6px; background: #374151;
+            text-align: left; color: #f3f4f6; font-size: 14px;
+        }
+        .mobile-action-grid button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .mobile-action-field { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-bottom: 14px; }
+        .mobile-action-field label { flex: 1; min-width: 140px; font-size: 14px; }
+        .mobile-action-field input {
+            display: block; width: 100%; min-height: 44px; margin-top: 6px; padding: 8px;
+            border: 1px solid #4b5563; border-radius: 6px; background: #111827; color: #fff; font-size: 16px;
+        }
+        .mobile-layout .mobile-only:not(.hidden) { display: inline-flex; }
+        .mobile-layout { height: 100dvh; }
+        .mobile-layout #app-toolbar { padding: 6px 10px; gap: 6px; z-index: 50; }
+        .mobile-layout .toolbar-brand { display: none; }
+        .mobile-layout #toolbar-profiles { width: auto; flex: 1; gap: 4px; }
+        .mobile-layout #profile-select { height: 44px; max-width: 150px; font-size: 14px; }
+        .mobile-layout .toolbar-icon { width: 44px; height: 44px; }
+        .mobile-layout .toolbar-actions { width: auto; margin-left: auto; flex: 0 1 auto; gap: 4px; }
+        .mobile-layout .toolbar-action-group { display: contents; }
+        .mobile-layout #toolbar-local-controls { display: flex; gap: 0; }
+        .mobile-layout .toolbar-separator { display: none; }
+        .mobile-layout .toolbar-action { min-width: 44px; height: 44px; padding: 0 10px; }
+        .mobile-layout .toolbar-action svg, .mobile-layout .toolbar-icon svg { width: 20px; height: 20px; }
+        .mobile-layout #backup-menu > summary > .icon-svg-sm { display: none; }
+        .mobile-layout span.toolbar-status { min-width: 32px; padding: 0 6px; }
+        .mobile-layout .toolbar-button-label, .mobile-layout #github-connect-label,
+        .mobile-layout #json-file-label, .mobile-layout .toolbar-status:not(.toolbar-status-attention) > span { display: none; }
+        .mobile-layout #btn-sync { gap: 4px; }
+        .mobile-layout #btn-sync::after { content: attr(data-file-state); font-size: 10px; font-weight: 700; }
+        .mobile-layout #offline-cache-state {
+            width: 44px; height: 44px; padding: 18px; background-clip: content-box; cursor: pointer;
+        }
+        .mobile-layout #offline-cache-state:focus-visible { outline: 2px solid #93c5fd; }
+        .mobile-layout #toolbar-help-button { width: 44px; }
+        .mobile-layout #toolbar-project-controls { min-width: 0; flex-basis: 100%; flex-wrap: wrap; gap: 4px; }
+        .mobile-layout #current-project-title { flex: 1 0 100%; min-width: 0; max-width: none; font-size: 16px; }
+        .mobile-layout #current-project-title > span { min-height: 36px; }
+        .mobile-layout #date-picker-container { display: none !important; }
+        .mobile-layout #mobile-project-date { min-width: 44px; }
+        .mobile-layout #mobile-project-date svg { width: 20px; height: 20px; }
+        .mobile-layout .toolbar-view-control { min-height: 44px; height: 44px; padding: 0 8px; gap: 4px; }
+        .mobile-layout #zoom-menu > summary { min-width: 94px; }
+        .mobile-layout #subtasks-menu > summary { min-width: 44px; }
+        .mobile-layout #subtasks-menu > summary svg { width: 20px; height: 20px; }
+        .mobile-layout #view-toggle { height: 44px; }
+        .mobile-layout #view-toggle button { min-height: 44px; padding: 0 10px; }
+        .mobile-layout .toolbar-menu { position: static; }
+        .mobile-layout .toolbar-menu-panel {
+            position: fixed; width: max-content; min-width: 0; max-width: calc(100vw - 24px);
+            margin: 0; overflow-y: auto; overscroll-behavior: contain;
+        }
+        .mobile-layout .toolbar-menu-panel > button { min-height: 44px; font-size: 14px; }
+        .mobile-layout #backup-menu > .toolbar-menu-panel { min-width: 224px; }
+        .mobile-layout #mobile-sidebar-backdrop {
+            position: fixed; inset: 0; z-index: 60; background: #0009; border: 0;
+        }
+        .mobile-layout #sidebar {
+            position: fixed; inset: 0 auto 0 0; width: min(340px, calc(100vw - 44px)) !important;
+            opacity: 1 !important; z-index: 70; transform: translateX(-100%); visibility: hidden;
+            transition: transform 0.15s, visibility 0.15s;
+        }
+        .mobile-layout.mobile-sidebar-open #sidebar { transform: none; visibility: visible; transition: transform 0.15s; }
+        .mobile-layout #sidebar > div { min-width: 0; }
+        .mobile-layout #sidebar button, .mobile-layout #sidebar [role="button"] { min-height: 44px; }
+        .mobile-layout #sidebar .project-row-actions, .mobile-layout #sidebar .drag-grip { display: none; }
+        .mobile-layout #sidebar .project-row { min-height: 52px; }
+        .mobile-layout #sidebar .project-row > span { min-width: 0; }
+        .mobile-layout #sidebar .mobile-project-actions { width: 44px; flex-shrink: 0; }
+        .mobile-layout #sidebar-resizer { display: none; }
+        .mobile-layout #tracker-main { min-width: 0; }
+        .mobile-layout #overview-view, .mobile-layout #todo-view, .mobile-layout #summary-view { padding: 16px 12px; }
+        .mobile-layout #overview-content { grid-template-columns: minmax(0, 1fr); }
+        .mobile-layout #overview-view h2, .mobile-layout #todo-view h2 { font-size: 26px; }
+        .mobile-layout #mobile-workspace-controls:not(.hidden) {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px;
+            background: #111827; border-bottom: 1px solid #374151; flex-shrink: 0;
+        }
+        #mobile-workspace-controls button { min-height: 44px; padding: 8px 12px; border-radius: 6px; }
+        #mobile-workspace-controls button[aria-pressed="true"] { background: #2563eb; color: white; }
+        #workspace.desktop-capture #task-panel { transition: none; }
+        .mobile-layout #workspace:not(.desktop-capture) #task-resizer { display: none; }
+        .mobile-layout #workspace:not(.desktop-capture) #task-panel {
+            width: 100% !important; min-width: 0; flex: 1; opacity: 1 !important;
+        }
+        .mobile-layout #workspace:not(.desktop-capture) #task-panel > div { min-width: 0; }
+        .mobile-layout #workspace:not(.desktop-capture) #task-panel-header { display: none; }
+        .mobile-layout #workspace:not(.desktop-capture) #task-list { padding: 8px 10px 24px; }
+        .mobile-layout.mobile-timeline #workspace:not(.desktop-capture) #task-panel { display: none; }
+        .mobile-layout:not(.mobile-timeline) #workspace:not(.desktop-capture) #gantt-scroll { display: none; }
+        .mobile-layout #workspace:not(.desktop-capture) .task-bar { height: 32px; }
+        .mobile-layout #workspace:not(.desktop-capture) .resize-handle { width: 20px; }
+        .mobile-layout:not(.timeline-editing) #workspace:not(.desktop-capture) .task-bar,
+        .mobile-layout:not(.timeline-editing) #workspace:not(.desktop-capture) .milestone,
+        .mobile-layout:not(.timeline-editing) #workspace:not(.desktop-capture) .resize-handle { touch-action: pan-x pan-y; }
+        .mobile-task-card { margin-bottom: 8px; padding: 8px; border: 1px solid #374151; border-radius: 8px; background: #111827; }
+        .mobile-task-card button { min-height: 44px; }
+        .mobile-task-card .task-fold-toggle { width: 44px; height: 44px; }
+        .mobile-task-card .task-fold-spacer { width: 0; }
+        .mobile-task-name { flex: 1; min-width: 0; padding: 8px; text-align: left; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+        .mobile-task-meta { display: flex; align-items: center; gap: 8px; padding-left: 8px; font-size: 12px; color: #9ca3af; }
+        .mobile-task-meta > span { flex: 1; min-width: 0; }
+        .mobile-task-meta > button { min-width: 44px; color: #93c5fd; }
+        .mobile-layout #add-root-container button { min-height: 44px; }
+        .mobile-layout #summary-content h1 { font-size: 24px; overflow-wrap: anywhere; flex-wrap: wrap; }
+        .mobile-layout #summary-content .opacity-0 { opacity: 1; }
+        .mobile-layout #summary-content [data-summary-task-index] { margin-left: min(calc(var(--task-indent) * 8px), 32px) !important; }
+        .mobile-layout #summary-content [data-summary-task-index] > div { gap: 6px; }
+        .mobile-layout #summary-content [data-summary-task-index] > div > .w-12 { width: auto; max-width: 48px; overflow-wrap: anywhere; }
+        .mobile-layout #summary-content [data-summary-task-index] .flex-1 { min-width: 0; }
+        .mobile-layout #summary-content [data-summary-task-index] .text-xl,
+        .mobile-layout #summary-content [data-summary-task-index] .text-lg { font-size: 16px; overflow-wrap: anywhere; flex-wrap: wrap; }
+        .mobile-layout #summary-content .task-fold-toggle { width: 44px; height: 44px; }
+        .mobile-layout #summary-content .task-fold-spacer { width: 0; }
+        .mobile-layout #summary-content button { min-width: 44px; min-height: 44px; }
+        .mobile-layout #todo-content button, .mobile-layout #todo-content label { min-width: 44px; min-height: 44px; }
+        .mobile-layout #todo-content button, .mobile-layout #todo-content select,
+        .mobile-layout #todo-content input:not([type="checkbox"]) { min-height: 44px; }
+        .mobile-layout #todo-content input:not([type="checkbox"]), .mobile-layout #todo-content select { font-size: 16px; min-width: 0; max-width: 100%; }
+        .mobile-layout .todo-item { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; padding: 8px; }
+        .todo-checkbox-wrap { display: contents; }
+        .mobile-layout .todo-checkbox-wrap { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; }
+        .mobile-layout .todo-item > .drag-grip, .mobile-layout .todo-item > [data-controls] { display: none; }
+        .mobile-layout .todo-item-text { grid-column: 2; grid-row: 1; align-self: center; }
+        .mobile-layout .todo-mobile-actions { grid-column: 3; grid-row: 1; width: 44px; }
+        .mobile-layout .todo-item > [data-rest], .mobile-layout .todo-item > [data-mobile-badges] {
+            grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px;
+        }
+        .mobile-layout .todo-item > [data-rest]:empty, .mobile-layout .todo-item > [data-mobile-badges]:empty { display: none; }
+        .mobile-layout #todo-add-controls { flex-wrap: wrap; }
+        .mobile-layout #todo-input { flex-basis: 100%; }
+        .mobile-layout #todo-content h3 { font-size: 18px; overflow-wrap: anywhere; }
+        .mobile-layout [id$="-modal"] { top: var(--mobile-viewport-top, 0px); bottom: auto; height: var(--mobile-viewport-height, 100dvh); padding: 0; }
+        .mobile-layout [id$="-modal"] > div, .mobile-layout [id$="-modal"] > form {
+            width: 100%; max-width: 100%; height: 100%; max-height: 100%; min-height: 0;
+            overflow-y: auto; overscroll-behavior: contain; border-radius: 0;
+        }
+        .mobile-layout [id$="-modal"] input:not([type="checkbox"]), .mobile-layout [id$="-modal"] textarea,
+        .mobile-layout [id$="-modal"] select, .mobile-layout [contenteditable="true"] { font-size: 16px; }
+        .mobile-layout [id$="-modal"] button { min-width: 44px; min-height: 44px; }
+        .mobile-layout #help-modal .help-content { padding: 16px; min-height: 0; }
+        .mobile-layout .help-storage-table { display: block; overflow-x: auto; }
+        .mobile-layout #help-modal h3 { font-size: 16px; white-space: normal; }
+        .mobile-layout #modal-editor { flex: 1; min-height: 100px; max-height: 32vh; }
+        .mobile-layout #todo-toast-wrap { left: 10px; right: 10px; max-height: 50dvh; overflow-y: auto; z-index: 45; }
+        .mobile-layout #todo-toast-wrap > div { max-width: 100%; }
+        @media (min-width: 701px) { .mobile-layout #current-project-title { flex: 1; min-width: 120px; } }
+        @media (prefers-reduced-motion: reduce) { .mobile-layout #sidebar { transition: none; } }
         @media (max-width: 700px) {
             #app-toolbar { padding: 8px 12px; }
             #toolbar-profiles { width: 100%; }
@@ -1807,6 +1970,9 @@ async function startOnlineTracker() {
 <body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden font-sans text-sm relative online-starting">
     <header id="app-toolbar">
         <div id="toolbar-profiles" inert>
+            <button id="mobile-sidebar-toggle" type="button" onclick="setMobileSidebar(true)" class="mobile-only toolbar-icon bg-gray-700 rounded" aria-label="Open projects and To Do" aria-controls="sidebar" aria-expanded="false">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
             <h1 class="toolbar-brand text-white">Project Tracker</h1>
             <select id="profile-select" onchange="switchOnlineProfile(this.value)" class="bg-gray-900 text-white border border-gray-600 rounded px-2 py-1.5 text-xs font-semibold" aria-label="Active profile"></select>
             <button id="profiles-manage-button" onclick="openOnlineProfileManager()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 rounded text-gray-200" title="Manage profiles" aria-label="Manage profiles">
@@ -1819,6 +1985,9 @@ async function startOnlineTracker() {
                 <svg class="icon-svg text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                 <input type="date" id="project-start-date" class="bg-transparent text-gray-300 text-xs outline-none cursor-pointer" onchange="updateProjectDate(this.value)" aria-label="Project start date">
             </div>
+            <button id="mobile-project-date" type="button" class="mobile-only hidden toolbar-view-control" onclick="openMobileActions('project',activeProjectId)" aria-label="Project start date and actions">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M7 3v4M17 3v4"/></svg>
+            </button>
             <div class="flex items-center" id="zoom-controls" style="display:none;">
                 <details id="zoom-menu" class="relative toolbar-menu">
                     <summary class="toolbar-view-control" aria-haspopup="menu" aria-label="Gantt zoom"><span id="zoom-label">Day View</span></summary>
@@ -1830,7 +1999,7 @@ async function startOnlineTracker() {
                 </details>
             </div>
             <details id="subtasks-menu" class="relative toolbar-menu hidden">
-                <summary class="toolbar-view-control" aria-haspopup="menu" title="Show or hide subtasks in this project; remembered only in this browser">Subtasks</summary>
+                <summary class="toolbar-view-control" aria-haspopup="menu" aria-label="Subtasks" title="Show or hide subtasks in this project; remembered only in this browser"><svg class="mobile-only icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3v12h12M6 7h12M6 11h12M3 3h6"/></svg><span class="toolbar-button-label">Subtasks</span></summary>
                 <div class="toolbar-menu-panel" role="menu" aria-label="Subtasks">
                     <button type="button" id="collapse-all-subtasks" onclick="setAllTaskBranches(true)" role="menuitem">Collapse all subtasks</button>
                     <button type="button" id="expand-all-subtasks" onclick="setAllTaskBranches(false)" role="menuitem">Expand all subtasks</button>
@@ -1844,9 +2013,9 @@ async function startOnlineTracker() {
         <div class="toolbar-actions">
             <div class="toolbar-action-group">
                 <details id="backup-menu" class="relative toolbar-menu">
-                    <summary class="toolbar-action" aria-haspopup="menu" title="Backups and current-view exports">
+                    <summary class="toolbar-action" aria-haspopup="menu" aria-label="Backups and exports" title="Backups and current-view exports">
                         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></svg>
-                        Backups
+                        <span class="toolbar-button-label">Backups</span>
                         <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
                     </summary>
                     <div class="toolbar-menu-panel" role="menu" aria-label="Backups and exports">
@@ -1858,7 +2027,7 @@ async function startOnlineTracker() {
                         <button onclick="exportToImage()" id="btn-export-img" class="hidden" role="menuitem">Export image</button>
                     </div>
                 </details>
-                <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden toolbar-action">Recovery</button>
+                <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden toolbar-action" aria-label="Recovery"><svg class="mobile-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/></svg><span class="toolbar-button-label">Recovery</span></button>
             </div>
             <span class="toolbar-separator" aria-hidden="true"></span>
             <div class="toolbar-action-group">
@@ -1867,11 +2036,11 @@ async function startOnlineTracker() {
                     <span id="github-connect-label">Connect GitHub</span>
                 </button>
                 <span id="online-status" class="toolbar-action toolbar-status toolbar-status-neutral" role="status" aria-live="polite">Starting...</span>
-                <button id="online-retry" onclick="onlineStore.retry()" class="hidden toolbar-action">Retry sync</button>
+                <button id="online-retry" onclick="onlineStore.retry()" class="hidden toolbar-action" aria-label="Retry sync"><svg class="mobile-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 11.5-2L20 8M4 16l2.5 3A7 7 0 0 0 18 17"/></svg><span class="toolbar-button-label">Retry sync</span></button>
             </div>
             <span class="toolbar-separator" aria-hidden="true"></span>
             <div id="toolbar-local-controls" class="toolbar-action-group">
-                <button id="btn-sync" onclick="toggleAutoSave()" class="toolbar-action json-file-button toolbar-json-off" title="Automatically write this profile to a JSON file on this device. This is separate from GitHub sync.">
+                <button id="btn-sync" onclick="toggleAutoSave()" class="toolbar-action json-file-button toolbar-json-off" data-file-state="OFF" title="Automatically write this profile to a JSON file on this device. This is separate from GitHub sync.">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 11v7m-3-3 3 3 3-3"/></svg>
                     <span id="json-file-label">Auto-save to JSON file: OFF</span>
                 </button>
@@ -1886,11 +2055,13 @@ async function startOnlineTracker() {
         </div>
     </header>
     <div id="online-message" role="alert" class="hidden shrink-0 bg-amber-950 border-b border-amber-800 text-amber-200 px-4 py-2 text-xs"></div>
+    <button id="mobile-sidebar-backdrop" type="button" class="mobile-only hidden" onclick="setMobileSidebar(false)" aria-label="Close projects"></button>
     <div id="tracker-shell" class="flex flex-1 min-h-0 overflow-hidden" inert>
     <aside id="sidebar" class="bg-gray-800 flex flex-col z-20 shrink-0 overflow-hidden transition-[width] duration-75" style="width: 256px;">
         <div class="min-w-[200px] h-full flex flex-col">
             <div class="px-3 py-2 flex justify-between items-center shrink-0">
                 <h2 class="text-xs font-semibold uppercase tracking-wide text-gray-400">Projects</h2>
+                <button id="mobile-sidebar-close" type="button" class="mobile-only toolbar-icon" onclick="setMobileSidebar(false)" aria-label="Close projects">&times;</button>
                 <button onclick="addProject()" class="text-gray-400 hover:text-white font-bold text-lg flex items-center justify-center w-6 h-6 rounded hover:bg-gray-700" title="New Project">
                     <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 </button>
@@ -1910,7 +2081,13 @@ async function startOnlineTracker() {
     </aside>
     
     <div id="sidebar-resizer" class="panel-resizer" title="Drag to resize, double-click to collapse/expand"></div>
-    <main class="flex-1 flex flex-col overflow-hidden relative">
+    <main id="tracker-main" class="flex-1 flex flex-col overflow-hidden relative">
+        <div id="mobile-workspace-controls" class="mobile-only hidden" aria-label="Project workspace">
+            <button type="button" id="mobile-tasks-button" onclick="setMobilePane('tasks')" aria-pressed="true">Tasks</button>
+            <button type="button" id="mobile-timeline-button" onclick="setMobilePane('timeline')" aria-pressed="false">Timeline</button>
+            <button type="button" id="mobile-weekends-button" onclick="toggleCountWeekends()" aria-pressed="true">Calendar days</button>
+            <button type="button" id="mobile-timeline-edit" onclick="setMobileTimelineEditing(!mobileTimelineEditing)" aria-pressed="false" class="hidden">Move / resize</button>
+        </div>
         <!-- View 0: Overview -->
         <div class="flex-1 overflow-y-auto bg-gray-900 p-8 hidden" id="overview-view">
             <div class="max-w-6xl mx-auto">
@@ -1926,7 +2103,7 @@ async function startOnlineTracker() {
         <div class="flex-1 flex overflow-hidden" id="workspace" style="display: none;">
             <div id="task-panel" class="bg-gray-900 flex flex-col z-10 shadow-lg shrink-0 overflow-hidden transition-[width] duration-75" style="width: 520px;">
                 <div class="min-w-[400px] h-full flex flex-col">
-                    <div class="h-10 p-2 border-b border-gray-800 font-semibold text-xs text-gray-400 uppercase flex items-center shrink-0">
+                    <div id="task-panel-header" class="h-10 p-2 border-b border-gray-800 font-semibold text-xs text-gray-400 uppercase flex items-center shrink-0">
                         <div class="w-6"></div>
                         <div class="flex-1">Task Name</div>
                         <div class="w-16 text-center text-blue-400" title="Progress %&#10;* = Automatic&#10;¤ = Manual">Prog</div>
@@ -1958,6 +2135,18 @@ async function startOnlineTracker() {
             <div id="summary-content" class="max-w-4xl mx-auto pb-20 relative"></div>
         </div>
     </main>
+    </div>
+    <div id="mobile-actions-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center" onclick="if(event.target===this) closeMobileActions()">
+        <div class="online-modal bg-gray-800 rounded-lg shadow-xl w-[550px] max-w-[90%] flex flex-col border border-gray-600" role="dialog" aria-modal="true" aria-labelledby="mobile-actions-title">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center shrink-0">
+                <h3 id="mobile-actions-title" class="font-bold text-lg min-w-0 break-words"></h3>
+                <button id="mobile-actions-close" type="button" onclick="closeMobileActions()" class="toolbar-icon" aria-label="Close actions">&times;</button>
+            </div>
+            <div class="p-4 overflow-y-auto min-h-0">
+                <div id="mobile-actions-error" class="hidden text-red-300 text-sm mb-3" role="alert"></div>
+                <div id="mobile-actions-content"></div>
+            </div>
+        </div>
     </div>
     <!-- Details Modal -->
     <div id="task-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -2065,6 +2254,16 @@ async function startOnlineTracker() {
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">3. Interactive Gantt Timeline</h2>
+                <h3 class="text-lg font-bold text-white mb-2">Phones and touch screens</h3>
+                <p class="mb-2">The interface adapts automatically to a narrow browser window, or a medium-sized touch-first screen, including phone landscape. Wide desktop windows keep the original layout and mouse controls. No PWA or home-screen installation is required.</p>
+                <ul>
+                    <li><b>Projects:</b> Tap the three-line button beside the profile selector to open Projects, Overview and To Do. Tap a project to close the drawer and use the full screen.</li>
+                    <li><b>Compact toolbar:</b> The GitHub logo opens settings. Sync has a separate indicator; conflicts and errors keep explicit messages. Backups and Recovery use icons. The calendar icon opens the project start date and project actions. The file icon still shows <b>ON / OFF</b>; tap its adjacent offline dot for device-storage details. Menus retain their action names.</li>
+                    <li><b>Tasks / Timeline:</b> Gantt keeps both full-width task cards and a scrollable timeline. Tap a task name or its three-dot actions button for notes, progress, hierarchy, branch ordering, dates, duplication and deletion. Calendar / Working days changes the displayed duration; the duration editor uses calendar days.</li>
+                    <li><b>Safe touch scheduling:</b> Timeline starts in browsing mode, so swiping scrolls without changing dates. Choose <b>Move / resize</b> to drag bars and their right edges; choose <b>Browse / scroll</b> afterward. Cancellation or changing layouts discards an unfinished drag. Moving or reordering a parent includes hidden descendants.</li>
+                    <li><b>To Do:</b> Tap an item's three-dot button for editing, moving, copying, ordering, calendar export and deletion. Export the selected day and Overdue items from Backups, as on desktop.</li>
+                    <li><b>Same data and exports:</b> Rotation does not submit or discard open editors. Task/Timeline choice is browser-local, not cloud-synced. Chart exports retain their desktop report layout, not a cropped phone screen.</li>
+                </ul>
                 <h3 class="text-lg font-bold text-white mb-2">Timeline Navigation</h3>
                 <p class="mb-2">Use the <b>Day / Week / Month View</b> menu in the header to scale your timeline. It uses the same compact popup design as <b>Subtasks</b>. Within an open menu, arrow keys move between available actions, Enter chooses one, and Escape closes the menu.</p>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Drag-and-Drop Scheduling</h3>
@@ -2088,6 +2287,7 @@ async function startOnlineTracker() {
                     <li>Once enabled, the button shows <b>ON</b>; hover over it to see the linked filename. Saved changes in this profile are written there. Click again to stop; neither linking nor a write failure disconnects GitHub.</li>
                     <li>Re-enable the link after reopening. The file remains on disk. This is one-way writing: external file edits are not read back. Import any existing file contents you need before choosing that file for automatic writing.</li>
                 </ol>
+                <p class="mb-4">Automatic writing requires this browser's file-picker support and, on the website, HTTPS. Support varies by browser and device; the app checks the actual feature rather than assuming all phones behave alike. If unavailable, browser saving, offline editing, GitHub sync and manual JSON downloads remain available.</p>
                 <h3 class="text-lg font-bold text-white mb-2">D. Manual Backups (Import / Export)</h3>
                 <ul>
                     <li><b>Export Backup:</b> Use <b>Backups &gt; Export Backup</b> for the active profile, or <b>Backup all profiles</b> for every profile and its recovery snapshots. JSON always contains all tasks, including collapsed subtasks; it does not contain browser-only view preferences or the token.</li>
@@ -2304,9 +2504,335 @@ async function startOnlineTracker() {
         const svgCalendar = `<svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
         const svgClock = `<svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
         const svgCopy = `<svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+        const svgMobileMore = `<svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>`;
         let data = onlineStore.current().data;
         let activeProjectId = readOnlineView('activeProjectId', 'overview');
         if (!['overview', 'todo'].includes(activeProjectId) && !data.projects.some(p => p.id === activeProjectId)) activeProjectId = 'overview';
+        const mobileLayoutQuery = matchMedia('(max-width: 700px), (max-width: 1024px) and (pointer: coarse)');
+        let mobileLayout = mobileLayoutQuery.matches;
+        let mobileSidebarOpen = false;
+        let mobileTimelineEditing = false;
+        let mobileProjectId = null;
+        let mobileActionsContext = null;
+        let mobileActionsReturnFocus = null;
+        let cancelTimelineGesture = null;
+        let adaptiveViewportWidth = innerWidth;
+
+        function refreshMobileViewport() {
+            const viewport = window.visualViewport;
+            document.body.style.setProperty('--mobile-viewport-height', (viewport ? viewport.height : innerHeight) + 'px');
+            document.body.style.setProperty('--mobile-viewport-top', (viewport ? viewport.offsetTop : 0) + 'px');
+            document.querySelectorAll('.toolbar-menu[open]').forEach(positionMobileMenu);
+        }
+        function positionMobileMenu(menu) {
+            const panel = menu.querySelector(':scope > div');
+            if (!panel) return;
+            if (!mobileLayout || !menu.open) {
+                ['top', 'left', 'right', 'max-height'].forEach(property => panel.style.removeProperty(property));
+                return;
+            }
+            const viewport = window.visualViewport;
+            const top = viewport ? viewport.offsetTop : 0;
+            const height = viewport ? viewport.height : innerHeight;
+            panel.style.maxHeight = Math.max(44, height - 24) + 'px';
+            const anchor = menu.querySelector('summary').getBoundingClientRect();
+            const size = panel.getBoundingClientRect();
+            panel.style.right = 'auto';
+            panel.style.left = Math.max(12, Math.min(anchor.left, innerWidth - size.width - 12)) + 'px';
+            panel.style.top = Math.max(top + 12, Math.min(anchor.bottom + 6, top + height - size.height - 12)) + 'px';
+        }
+        function refreshMobileUI() {
+            document.body.classList.toggle('mobile-layout', mobileLayout);
+            const pane = readOnlineView('mobilePane', 'tasks');
+            const timeline = pane === 'timeline';
+            const project = !['overview', 'todo'].includes(activeProjectId);
+            const projectKey = onlineStore.current().id + ':' + activeProjectId;
+            if (projectKey !== mobileProjectId) {
+                mobileProjectId = projectKey;
+                mobileTimelineEditing = false;
+            }
+            setMobileSidebar(mobileSidebarOpen, false);
+            document.body.classList.toggle('mobile-timeline', mobileLayout && timeline);
+            document.body.classList.toggle('timeline-editing', mobileLayout && mobileTimelineEditing);
+            document.getElementById('mobile-workspace-controls').classList.toggle('hidden', !mobileLayout || !project || currentViewMode !== 'gantt');
+            const projectDate = document.getElementById('mobile-project-date');
+            projectDate.classList.toggle('hidden', !project);
+            projectDate.title = 'Project start date: ' + (data.projects.find(item => item.id === activeProjectId)?.startDate || '');
+            document.getElementById('mobile-tasks-button').setAttribute('aria-pressed', String(!timeline));
+            document.getElementById('mobile-timeline-button').setAttribute('aria-pressed', String(timeline));
+            const edit = document.getElementById('mobile-timeline-edit');
+            edit.classList.toggle('hidden', !timeline);
+            edit.setAttribute('aria-pressed', String(mobileTimelineEditing));
+            edit.textContent = mobileTimelineEditing ? 'Browse / scroll' : 'Move / resize';
+            const weekends = data.projects.find(item => item.id === activeProjectId)?.countWeekends !== false;
+            document.getElementById('mobile-weekends-button').textContent = weekends ? 'Calendar days' : 'Working days';
+            document.getElementById('mobile-weekends-button').setAttribute('aria-pressed', String(weekends));
+            const dot = document.getElementById('offline-cache-state');
+            dot.setAttribute('role', mobileLayout ? 'button' : 'status');
+            dot.setAttribute('aria-label', (dot.title || 'Offline cache status') + (mobileLayout ? '. Show device storage details' : ''));
+            if (mobileLayout) dot.tabIndex = 0;
+            else dot.removeAttribute('tabindex');
+            for (const id of ['btn-todo', 'btn-overview']) {
+                const navigation = document.getElementById(id);
+                if (mobileLayout) { navigation.setAttribute('role', 'button'); navigation.tabIndex = 0; }
+                else { navigation.removeAttribute('role'); navigation.removeAttribute('tabindex'); }
+            }
+            document.querySelectorAll('.toolbar-menu').forEach(positionMobileMenu);
+        }
+        function setMobilePane(pane) {
+            if (!['tasks', 'timeline'].includes(pane)) { showOnlineError(new Error('Unknown mobile workspace view.')); return; }
+            mobileTimelineEditing = false;
+            writeOnlineView('mobilePane', pane);
+            render();
+        }
+        function setMobileTimelineEditing(enabled) {
+            if (cancelTimelineGesture) cancelTimelineGesture();
+            mobileTimelineEditing = !!enabled;
+            refreshMobileUI();
+        }
+        function setMobileSidebar(open, restoreFocus = true) {
+            if (open && cancelTimelineGesture) cancelTimelineGesture();
+            open = !!open && mobileLayout && !document.getElementById('tracker-shell').inert;
+            const changed = open !== mobileSidebarOpen;
+            mobileSidebarOpen = open;
+            document.body.classList.toggle('mobile-sidebar-open', open);
+            document.getElementById('mobile-sidebar-backdrop').classList.toggle('hidden', !open);
+            document.getElementById('mobile-sidebar-toggle').setAttribute('aria-expanded', String(open));
+            document.getElementById('sidebar').inert = mobileLayout && !open;
+            document.getElementById('app-toolbar').inert = open;
+            document.getElementById('tracker-main').inert = open;
+            if (changed && open) requestAnimationFrame(() => {
+                if (mobileSidebarOpen) document.getElementById('mobile-sidebar-close').focus({ preventScroll: true });
+            });
+            else if (changed && restoreFocus && mobileLayout) document.getElementById('mobile-sidebar-toggle').focus({ preventScroll: true });
+        }
+        function applyAdaptiveLayout() {
+            const changed = mobileLayout !== mobileLayoutQuery.matches;
+            if (changed && cancelTimelineGesture) cancelTimelineGesture();
+            const draft = ['todo-input', 'todo-time', 'todo-proj'].map(id => {
+                const element = document.getElementById(id);
+                return element ? { id, value: element.value, focused: document.activeElement === element,
+                    start: element.selectionStart, end: element.selectionEnd } : null;
+            }).filter(Boolean);
+            mobileLayout = mobileLayoutQuery.matches;
+            if (!mobileLayout) mobileTimelineEditing = false;
+            refreshMobileUI();
+            if (changed) {
+                render();
+                draft.forEach(saved => {
+                    const element = document.getElementById(saved.id);
+                    if (!element) return;
+                    element.value = saved.value;
+                    if (saved.focused) {
+                        element.focus({ preventScroll: true });
+                        if (saved.start !== null && typeof element.setSelectionRange === 'function') element.setSelectionRange(saved.start, saved.end);
+                    }
+                });
+            }
+            refreshMobileViewport();
+        }
+        function mobileActionError(error) {
+            console.error('Mobile action:', error.message);
+            const box = document.getElementById('mobile-actions-error');
+            box.textContent = error.message;
+            box.classList.remove('hidden');
+        }
+        function closeMobileActions(restoreFocus = true) {
+            document.getElementById('mobile-actions-modal').classList.add('hidden');
+            mobileActionsContext = null;
+            if (restoreFocus && mobileActionsReturnFocus?.isConnected && mobileActionsReturnFocus.getClientRects().length) {
+                mobileActionsReturnFocus.focus({ preventScroll: true });
+            }
+        }
+        function taskBranchEnd(index) {
+            const tasks = data.tasks[activeProjectId];
+            let end = index + 1;
+            while (end < tasks.length && (tasks[end].indent || 0) > (tasks[index].indent || 0)) end++;
+            return end;
+        }
+        function reorderTaskBranch(index, target) {
+            const tasks = data.tasks[activeProjectId];
+            if (!Number.isInteger(index) || index < 0 || index >= tasks.length ||
+                !Number.isInteger(target) || target < 0 || target > tasks.length) throw new Error('This task position is no longer available.');
+            const end = taskBranchEnd(index);
+            if (target >= index && target <= end) return;
+            const branch = tasks.splice(index, end - index);
+            tasks.splice(target > index ? target - branch.length : target, 0, ...branch);
+            updateDataAndRender();
+        }
+        function taskMoveGroup(index) {
+            const tasks = data.tasks[activeProjectId];
+            return tasks[index].isParent ? tasks.slice(index, taskBranchEnd(index)) : [tasks[index]];
+        }
+        function shiftTaskBranch(index, shift) {
+            if (!Number.isSafeInteger(shift)) throw new Error('Enter a valid date.');
+            const group = taskMoveGroup(index);
+            const delta = Math.max(-Math.min(...group.map(task => task.startDay)), shift);
+            if (group.some(task => !Number.isSafeInteger(task.startDay + delta))) throw new Error('The chosen date is outside the supported range.');
+            group.forEach(task => { task.startDay += delta; });
+            updateDataAndRender();
+        }
+        function openMobileActions(kind, id = null, date = null) {
+            if (cancelTimelineGesture) cancelTimelineGesture();
+            mobileActionsReturnFocus = document.activeElement;
+            setMobileSidebar(false, false);
+            document.querySelectorAll('.toolbar-menu[open]').forEach(menu => { menu.open = false; });
+            const content = document.getElementById('mobile-actions-content');
+            content.replaceChildren();
+            document.getElementById('mobile-actions-error').classList.add('hidden');
+            mobileActionsContext = { kind, id, date, projectId: activeProjectId };
+            const resolveTaskIndex = () => {
+                if (activeProjectId !== mobileActionsContext.projectId) throw new Error('The selected project changed. Open the task again.');
+                const index = (data.tasks[activeProjectId] || []).findIndex(task => task.id === id);
+                if (index < 0) throw new Error('This task is no longer available.');
+                return index;
+            };
+            const run = action => {
+                try { action(); }
+                catch (error) {
+                    if (document.getElementById('mobile-actions-modal').classList.contains('hidden')) showOnlineError(error);
+                    else mobileActionError(error);
+                }
+            };
+            const paragraph = text => {
+                const element = document.createElement('p');
+                element.className = 'text-sm text-gray-300 mb-4 break-words';
+                element.textContent = text;
+                content.append(element);
+            };
+            const grid = document.createElement('div');
+            grid.className = 'mobile-action-grid';
+            const button = (label, action, disabled = false) => {
+                const element = document.createElement('button');
+                element.type = 'button'; element.textContent = label; element.disabled = disabled;
+                element.onclick = () => run(action);
+                grid.append(element);
+            };
+            const field = (labelText, type, value, actionLabel, action) => {
+                const row = document.createElement('div'); row.className = 'mobile-action-field';
+                const label = document.createElement('label'); label.textContent = labelText;
+                const input = document.createElement('input'); input.type = type; input.value = value;
+                input.setAttribute('aria-label', labelText);
+                if (type === 'number') { input.min = '1'; input.step = '1'; }
+                label.append(input);
+                const apply = document.createElement('button'); apply.type = 'button'; apply.textContent = actionLabel;
+                apply.onclick = () => run(() => action(input.value));
+                row.append(label, apply); content.append(row);
+            };
+            const perform = action => { closeMobileActions(false); action(); };
+            try {
+                if (kind === 'task') {
+                    const index = resolveTaskIndex(), tasks = data.tasks[activeProjectId], task = tasks[index];
+                    const project = data.projects.find(item => item.id === activeProjectId);
+                    document.getElementById('mobile-actions-title').textContent = task.name;
+                    paragraph(getTaskDateRangeStr(project.startDate, task.startDay, task.duration, task.isMilestone) +
+                        ' · ' + task.progress + '% progress · Level ' + ((task.indent || 0) + 1));
+                    const start = addDaysToDate(project.startDate, task.startDay);
+                    const startValue = start.getFullYear() + '-' + String(start.getMonth() + 1).padStart(2, '0') + '-' + String(start.getDate()).padStart(2, '0');
+                    field('Move branch to date', 'date', startValue, 'Move', value => {
+                        const target = (Date.parse(value + 'T00:00:00Z') - Date.parse(project.startDate + 'T00:00:00Z')) / 86400000;
+                        if (!Number.isSafeInteger(target) || target < 0) throw new Error('Choose a date on or after the project start date.');
+                        const current = resolveTaskIndex();
+                        perform(() => shiftTaskBranch(current, target - data.tasks[activeProjectId][current].startDay));
+                    });
+                    if (!task.isParent && !task.isMilestone) field('Duration (calendar days)', 'number', task.duration, 'Apply', value => {
+                        const duration = Number(value);
+                        if (!Number.isSafeInteger(duration) || duration < 1) throw new Error('Enter a positive whole number of calendar days.');
+                        const current = resolveTaskIndex();
+                        if (!Number.isFinite(addDaysToDate(project.startDate, data.tasks[activeProjectId][current].startDay + duration - 1).getTime())) {
+                            throw new Error('Choose a duration whose finish date is within the supported calendar range.');
+                        }
+                        perform(() => { data.tasks[activeProjectId][current].duration = duration; updateDataAndRender(); });
+                    });
+                    let previous = index - 1;
+                    while (previous >= 0 && (tasks[previous].indent || 0) > (task.indent || 0)) previous--;
+                    const next = taskBranchEnd(index);
+                    button('Move branch up', () => { const current = resolveTaskIndex(); perform(() => reorderTaskBranch(current, previous)); },
+                        previous < 0 || (tasks[previous].indent || 0) !== (task.indent || 0));
+                    button('Move branch down', () => { const current = resolveTaskIndex(); const target = taskBranchEnd(taskBranchEnd(current)); perform(() => reorderTaskBranch(current, target)); },
+                        next >= tasks.length || (tasks[next].indent || 0) !== (task.indent || 0));
+                    for (const [label, action] of [
+                        ['Rename task', renameTask], ['Progress', setProgress], ['Duplicate branch', duplicateTask],
+                        ['Add subtask', addTask], ['Delete branch', deleteTask],
+                    ]) button(label, () => { const current = resolveTaskIndex(); perform(() => action(current)); });
+                    button('Indent', () => { const current = resolveTaskIndex(); perform(() => changeIndent(current, 1)); });
+                    button('Outdent', () => { const current = resolveTaskIndex(); perform(() => changeIndent(current, -1)); }, !(task.indent || 0));
+                    button('Edit notes', () => { const current = resolveTaskIndex(); perform(() => { openModal(current); enterEditMode(); }); });
+                } else if (kind === 'project') {
+                    const index = data.projects.findIndex(project => project.id === id);
+                    if (index < 0) throw new Error('This project is no longer available.');
+                    document.getElementById('mobile-actions-title').textContent = data.projects[index].name;
+                    field('Project start date', 'date', data.projects[index].startDate, 'Apply', value => {
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value + 'T00:00:00Z'))) throw new Error('Choose a valid project start date.');
+                        perform(() => { if (activeProjectId !== id) openProject(id); updateProjectDate(value); });
+                    });
+                    for (const [label, action] of [['Rename project', renameProject], ['Duplicate project', duplicateProject], ['Delete project', deleteProject]]) {
+                        button(label, () => perform(() => action(id)));
+                    }
+                    for (const [label, delta] of [['Move project up', -1], ['Move project down', 1]]) {
+                        button(label, () => perform(() => {
+                            const current = data.projects.findIndex(project => project.id === id);
+                            const moved = data.projects.splice(current, 1)[0];
+                            data.projects.splice(current + delta, 0, moved);
+                            updateDataAndRender();
+                        }), index + delta < 0 || index + delta >= data.projects.length);
+                    }
+                    button('Edit project notes', () => perform(() => { openProject(id); openModal(null, 'project'); enterEditMode(); }));
+                } else if (kind === 'todo') {
+                    const list = data.todos[date] || [], index = list.findIndex(item => item.id === id);
+                    if (index < 0) throw new Error('This To Do is no longer available.');
+                    document.getElementById('mobile-actions-title').textContent = list[index].text;
+                    field('Destination date', 'date', todoShiftDate(date, 1), 'Move', value => {
+                        if (!value) throw new Error('Choose a destination date.');
+                        perform(() => doMoveTodo(date, id, value));
+                    });
+                    field('Copy to date', 'date', todoShiftDate(date, 1), 'Copy', value => {
+                        if (!value) throw new Error('Choose a destination date.');
+                        perform(() => doCopyTodo(date, id, value));
+                    });
+                    button('Edit text, time & project', () => perform(() => editTodo(date, id)));
+                    if (data.projects.some(project => project.id === list[index].projectId)) {
+                        button('Open linked project', () => perform(() => openProject(list[index].projectId)));
+                    }
+                    button('Move to tomorrow', () => perform(() => moveTodoNextDay(date, id)));
+                    button('Move to today', () => perform(() => moveTodoToToday(date, id)));
+                    button('Export .ics', () => perform(() => exportTodoIcs(date, id)));
+                    button('Delete item', () => perform(() => deleteTodo(date, id)));
+                    for (const [label, delta] of [['Move item up', -1], ['Move item down', 1]]) {
+                        button(label, () => perform(() => {
+                            const current = data.todos[date].findIndex(item => item.id === id);
+                            const moved = data.todos[date].splice(current, 1)[0];
+                            data.todos[date].splice(current + delta, 0, moved);
+                            saveTodos();
+                        }), index + delta < 0 || index + delta >= list.length);
+                    }
+                } else if (kind === 'device') {
+                    document.getElementById('mobile-actions-title').textContent = 'Saving on this device';
+                    paragraph('Application copy: ' + document.getElementById('offline-cache-state').title);
+                    paragraph('GitHub / browser save status: ' + onlineStore.status().label);
+                    paragraph(document.getElementById('btn-sync').textContent + '. ' + document.getElementById('btn-sync').title);
+                    paragraph('The offline dot describes the application cache, not GitHub synchronization. No PWA installation is needed.');
+                } else throw new Error('Unknown action menu.');
+                content.append(grid);
+                document.getElementById('mobile-actions-modal').classList.remove('hidden');
+                document.getElementById('mobile-actions-close').focus({ preventScroll: true });
+            } catch (error) {
+                mobileActionsContext = null;
+                showOnlineError(error);
+            }
+        }
+        function trapMobileFocus(event, container) {
+            if (event.key !== 'Tab') return;
+            const elements = Array.from(container.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]'))
+                .filter(element => element.getClientRects().length);
+            if (!elements.length) return;
+            const first = elements[0], last = elements[elements.length - 1];
+            if (event.shiftKey && (document.activeElement === first || !container.contains(document.activeElement))) {
+                event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && (document.activeElement === last || !container.contains(document.activeElement))) {
+                event.preventDefault(); first.focus();
+            }
+        }
         // --- IMPORT / EXPORT & SYNC LOGIC ---
         function triggerImport() { document.getElementById('file-import').click(); }
         function handleImport(event) {
@@ -2367,6 +2893,7 @@ async function startOnlineTracker() {
             const originalDays = TOTAL_GANTT_DAYS;
             const scroll = { left: scrollContainer.scrollLeft, top: scrollContainer.scrollTop, list: taskList.scrollTop };
             try {
+                workspace.classList.add('desktop-capture');
                 let minDay = rows.length ? Math.min(...rows.map(row => row.task.startDay)) : 0;
                 let maxDay = rows.length ? Math.max(...rows.map(row => row.task.startDay + row.task.duration)) : 30;
                 if (expandAll) TOTAL_GANTT_DAYS = Math.max(TOTAL_GANTT_DAYS, maxDay + 5);
@@ -2399,6 +2926,7 @@ async function startOnlineTracker() {
                 if (!image.startsWith('data:image/png;base64,')) throw new Error('The chart is too large to capture. Reduce the zoom or split the project.');
                 return image;
             } finally {
+                workspace.classList.remove('desktop-capture');
                 TOTAL_GANTT_DAYS = originalDays;
                 styles.forEach(([element, style]) => {
                     if (style === null) element.removeAttribute('style');
@@ -2627,8 +3155,8 @@ async function startOnlineTracker() {
             return `${formatDateShort(startD)} - ${formatDateShort(endD)}`;
         }
         // --- APP LOGIC ---
-        function openOverview() { activeProjectId = 'overview'; updateDataAndRender(); }
-        function openProject(id) { activeProjectId = id; updateDataAndRender(); }
+        function openOverview() { setMobileSidebar(false, false); activeProjectId = 'overview'; updateDataAndRender(); }
+        function openProject(id) { setMobileSidebar(false, false); activeProjectId = id; updateDataAndRender(); }
         function setViewMode(mode) {
             currentViewMode = mode;
             writeOnlineView('viewMode', mode);
@@ -2702,6 +3230,7 @@ async function startOnlineTracker() {
             document.querySelector('#subtasks-menu > summary').focus({ preventScroll: true });
         }
         function syncGanttScroll(source) {
+            if (mobileLayout && !document.getElementById('workspace').classList.contains('desktop-capture')) return;
             const list = document.getElementById('task-list');
             const timeline = document.getElementById('gantt-scroll');
             const top = Math.max(0, Math.min(source.scrollTop,
@@ -2777,6 +3306,7 @@ async function startOnlineTracker() {
                 data.projects.push({ id, name: name.trim(), description: "", startDate: todayStr, countWeekends: true });
                 data.tasks[id] = [];
                 activeProjectId = id;
+                setMobileSidebar(false, false);
                 updateDataAndRender();
             }
         }
@@ -3272,6 +3802,7 @@ async function startOnlineTracker() {
             renderTodoView();
         }
         function openTodo() {
+            setMobileSidebar(false, false);
             activeProjectId = 'todo';
             if (!todoDate) todoDate = todoTodayStr();
             updateDataAndRender();
@@ -3609,11 +4140,13 @@ async function startOnlineTracker() {
                     ? `<span data-controls class="shrink-0 flex items-center gap-3">${controls}</span>`
                     : `                    <span data-rest class="shrink-0 flex items-center gap-3 group-hover:hidden">${restBadges(dateStr, it, done)}</span>
                        <span data-controls class="shrink-0 hidden group-hover:flex items-center gap-3">${controls}</span>`;                return `
-                <div ${isOverdue ? '' : `draggable="true" data-todo-row data-todo-id="${it.id}"`} class="group flex items-start gap-3 px-3 py-3 rounded-lg border ${done ? 'border-gray-800 bg-gray-800/40' : 'border-gray-700 bg-gray-800'} hover:border-gray-600 transition-colors">
+                <div ${isOverdue ? '' : `draggable="${!mobileLayout}" data-todo-row data-todo-id="${it.id}"`} class="todo-item group flex items-start gap-3 px-3 py-3 rounded-lg border ${done ? 'border-gray-800 bg-gray-800/40' : 'border-gray-700 bg-gray-800'} hover:border-gray-600 transition-colors">
                     ${isOverdue ? '' : `<span class="drag-grip select-none text-gray-600 hover:text-gray-400 shrink-0 text-xs leading-none mt-[7px]" title="Drag to reorder">&#8942;&#8942;</span>`}
-                    <input type="checkbox" ${done ? 'checked' : ''} onchange="toggleTodo('${dateStr}','${it.id}')" class="w-5 h-5 shrink-0 mt-0.5 accent-blue-500 cursor-pointer">
-                    <span class="flex-1 min-w-0 break-words text-base leading-relaxed ${done ? 'line-through text-gray-500' : 'text-gray-100'} cursor-text" onclick="editTodo('${dateStr}','${it.id}')" title="Click to edit">${todoEsc(it.text)}</span>
+                    <label class="todo-checkbox-wrap" aria-label="Mark item complete"><input type="checkbox" ${done ? 'checked' : ''} onchange="toggleTodo('${dateStr}','${it.id}')" class="w-5 h-5 shrink-0 mt-0.5 accent-blue-500 cursor-pointer"></label>
+                    <span class="todo-item-text flex-1 min-w-0 break-words text-base leading-relaxed ${done ? 'line-through text-gray-500' : 'text-gray-100'} cursor-text" ${mobileLayout ? 'role="button" tabindex="0"' : ''} onclick="editTodo('${dateStr}','${it.id}')" title="Click to edit">${todoEsc(it.text)}</span>
                     ${right}
+                    ${isOverdue ? `<span data-mobile-badges class="mobile-only">${restBadges(dateStr, it, done)}</span>` : ''}
+                    <button type="button" class="mobile-only todo-mobile-actions icon-btn" onclick="openMobileActions('todo','${it.id}','${dateStr}')" aria-label="To Do actions">${svgMobileMore}</button>
                 </div>`;
             };
 
@@ -3670,7 +4203,7 @@ async function startOnlineTracker() {
             data.projects.forEach(p => {
                 projOptions += `<option value="${p.id}" ${todoLastProj === p.id ? 'selected' : ''}>${todoEsc(p.name)}</option>`;
             });
-            html += `<div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg p-2.5">
+            html += `<div id="todo-add-controls" class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg p-2.5">
                 <input id="todo-input" type="text" placeholder="Add an item, press Enter..." onkeydown="if(event.key==='Enter'){event.preventDefault();addTodo();}" class="flex-1 bg-transparent text-base text-white outline-none px-2 placeholder-gray-500">
                 <input id="todo-time" type="time" title="Optional reminder time" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 outline-none cursor-pointer">
                 <select id="todo-proj" title="Optional project tag" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 outline-none cursor-pointer max-w-[160px]">${projOptions}</select>
@@ -3862,7 +4395,7 @@ async function startOnlineTracker() {
                 const durationLabel = task.isMilestone ? '(Milestone)' : `(${displayDur} ${durUnit})`;
 
                 html += `
-                <div class="mb-6 group" data-summary-task-index="${index}" style="margin-left: ${lvl * 2.5}rem;">
+                <div class="mb-6 group" data-summary-task-index="${index}" style="margin-left: ${lvl * 2.5}rem;--task-indent:${lvl};">
                     <div class="flex items-start gap-3">
                         ${taskFoldControl(row)}
                         <span class="font-mono text-gray-500 font-semibold w-12 shrink-0 text-right mt-1">${numStr}</span>
@@ -3882,6 +4415,7 @@ async function startOnlineTracker() {
                                 <span class="ml-2 text-sm text-gray-500 font-mono flex items-center gap-1">${svgCalendar} ${dateStr} <span class="text-gray-600 ml-1 font-semibold">${durationLabel}</span></span>
                             </div>
                             ${hasDesc ? `<div class="mt-2 text-sm text-gray-300 rich-text bg-gray-800/60 p-4 rounded-lg border border-gray-700/50 leading-relaxed shadow-sm" onclick="openModal(${index})">${descHTML}</div>` : ''}
+                            <button type="button" class="mobile-only mobile-summary-actions px-3 py-2 mt-2 bg-gray-800 rounded" onclick="openMobileActions('task','${task.id}')" aria-label="Task actions">Task actions</button>
                         </div>
                     </div>
                 </div>`;
@@ -3889,6 +4423,7 @@ async function startOnlineTracker() {
             container.innerHTML = html;
         }
         function render() {
+            refreshMobileUI();
             const projectOpen = activeProjectId && !['overview', 'todo'].includes(activeProjectId);
             document.getElementById('toolbar-project-controls').style.display = projectOpen ? 'flex' : 'none';
             if (!projectOpen) document.getElementById('zoom-menu').open = false;
@@ -3912,14 +4447,15 @@ async function startOnlineTracker() {
             document.getElementById('btn-todo').className = `p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0 ${activeProjectId === 'todo' ? 'bg-gray-700 text-white border-l-4 border-l-blue-500 pl-2' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`;
             updateTodoBadge();
             document.getElementById('project-list').innerHTML = data.projects.map((p, index) => `
-                <div class="group flex justify-between items-center p-2 rounded cursor-pointer mb-1 project-row ${p.id === activeProjectId ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-gray-700/50 text-gray-300'}" draggable="true" onclick="openProject('${p.id}')">
+                <div class="group flex justify-between items-center p-2 rounded cursor-pointer mb-1 project-row ${p.id === activeProjectId ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-gray-700/50 text-gray-300'}" ${mobileLayout ? 'role="button" tabindex="0"' : ''} draggable="${!mobileLayout}" onclick="openProject('${p.id}')">
                     <div class="w-4 drag-grip select-none text-center mr-2 opacity-50 hover:opacity-100">⋮⋮</div>
                     <span class="truncate pr-2 flex-1 font-medium">${TrackerOnline.escapeText(p.name)}</span>
-                    <div class="hidden group-hover:flex shrink-0 gap-1.5 items-center text-gray-400">
+                    <div class="project-row-actions hidden group-hover:flex shrink-0 gap-1.5 items-center text-gray-400">
                         <button onclick="event.stopPropagation(); renameProject('${p.id}')" class="hover:text-yellow-400 px-1 icon-btn">${svgRename}</button>
                         <button onclick="event.stopPropagation(); duplicateProject('${p.id}')" class="hover:text-purple-400 px-1 icon-btn">${svgDuplicate}</button>
                         <button onclick="event.stopPropagation(); deleteProject('${p.id}')" class="hover:text-red-400 px-1 icon-btn">${svgDelete}</button>
                     </div>
+                    <button type="button" class="mobile-only mobile-project-actions icon-btn" onclick="event.stopPropagation();openMobileActions('project','${p.id}')" aria-label="Project actions">${svgMobileMore}</button>
                 </div>
             `).join('');
             document.querySelectorAll('.project-row').forEach((el, index) => {
@@ -4042,6 +4578,34 @@ async function startOnlineTracker() {
                 row.dataset.taskIndex = index;
                 row.className = "group flex border-b border-gray-800 h-10 items-center px-2 hover:bg-gray-800 task-row bg-gray-900 relative";
                 row.draggable = true;
+                if (mobileLayout && !document.getElementById('workspace').classList.contains('desktop-capture')) {
+                    row.className = 'task-row mobile-task-card';
+                    row.draggable = false;
+                    row.style.marginLeft = Math.min(indentLevel, 4) * 8 + 'px';
+                    const heading = document.createElement('div');
+                    heading.className = 'flex items-center';
+                    heading.innerHTML = taskFoldControl(displayRow);
+                    const name = document.createElement('button');
+                    name.type = 'button'; name.className = 'mobile-task-name';
+                    name.textContent = (task.isMilestone ? '♦ ' : '') + task.name;
+                    name.onclick = () => openMobileActions('task', task.id);
+                    heading.append(name);
+                    const meta = document.createElement('div'); meta.className = 'mobile-task-meta';
+                    const progress = document.createElement('button');
+                    progress.type = 'button'; progress.textContent = task.progress + '%' + task.progressSymbol;
+                    progress.setAttribute('aria-label', 'Set progress for ' + task.name);
+                    progress.onclick = () => setProgress(index);
+                    const dates = document.createElement('span');
+                    dates.textContent = getTaskDateRangeStr(project.startDate, task.startDay, task.duration, task.isMilestone) +
+                        ' · ' + displayDur + (countWknds ? ' calendar days' : ' working days') +
+                        (displayRow.folded ? ' · ' + displayRow.hiddenCount + ' subtasks hidden' : '');
+                    const actions = document.createElement('button');
+                    actions.type = 'button'; actions.innerHTML = svgMobileMore;
+                    actions.setAttribute('aria-label', 'Task actions for ' + task.name);
+                    actions.onclick = () => openMobileActions('task', task.id);
+                    meta.append(progress, dates, actions); row.append(heading, meta); listEl.append(row);
+                    return;
+                }
                 
                 row.innerHTML = `
                     <div class="w-6 drag-grip select-none text-center" title="Drag to reorder">⋮⋮</div>
@@ -4100,10 +4664,7 @@ async function startOnlineTracker() {
                     if (dragStartIndex === null) return;
                     let dropIndex = index;
                     if (dropIndex >= dragStartIndex && dropIndex < dragStartIndex + dragBranchSize) return;
-                    const branch = tasks.splice(dragStartIndex, dragBranchSize);
-                    if (dropIndex > dragStartIndex) dropIndex -= dragBranchSize; 
-                    tasks.splice(dropIndex, 0, ...branch);
-                    updateDataAndRender(); 
+                    reorderTaskBranch(dragStartIndex, dropIndex);
                 });
                 listEl.appendChild(row);
             });
@@ -4158,7 +4719,8 @@ async function startOnlineTracker() {
             const barsContainer = document.getElementById('gantt-bars');
             barsContainer.innerHTML = '';
             displayRows.forEach(({ task, index }, visibleIndex) => {
-                const top = visibleIndex * ROW_HEIGHT + 8;
+                const rowHeight = mobileLayout && !document.getElementById('workspace').classList.contains('desktop-capture') ? 48 : ROW_HEIGHT;
+                const top = visibleIndex * rowHeight + 8;
                 const left = task.startDay * dayWidth;
                 const width = Math.max(task.duration * dayWidth, task.isParent ? 12 : 0); 
                 const indentLevel = task.indent || 0;
@@ -4169,11 +4731,14 @@ async function startOnlineTracker() {
                 el.id = `bar-${task.id}`; 
                 el.title = getTooltipText(task, project.startDate, countWknds); 
                 el.ondblclick = () => openModal(index); 
+                el.addEventListener('click', () => {
+                    if (mobileLayout && !mobileTimelineEditing) openMobileActions('task', task.id);
+                });
                 
                 if (task.isMilestone) {
                     el.className = "milestone bg-milestone shadow-md hover:brightness-110";
                     el.style.top = `${top}px`; el.style.left = `${left - 12}px`; 
-                    setupHorizontalMove(el, task, index, tasks, countWknds);
+                    setupHorizontalMove(el, task, index);
                 } else {
                     // Make the container transparent but position it correctly
                     el.className = `absolute h-6 flex items-center task-bar cursor-grab hover:brightness-110 group`;
@@ -4200,90 +4765,85 @@ async function startOnlineTracker() {
                         const resizer = document.createElement('div');
                         resizer.className = "resize-handle z-20";
                         el.appendChild(resizer);
-                        setupHorizontalResize(resizer, el, task, countWknds);
+                        setupHorizontalResize(resizer, el, task);
                     }
-                    setupHorizontalMove(el, task, index, tasks, countWknds);
+                    setupHorizontalMove(el, task, index);
                 }
                 barsContainer.appendChild(el);
             });
             
-            document.getElementById('gantt-body').style.height = `${Math.max(displayRows.length * ROW_HEIGHT + 100, 400)}px`;
+            const rowHeight = mobileLayout && !document.getElementById('workspace').classList.contains('desktop-capture') ? 48 : ROW_HEIGHT;
+            document.getElementById('gantt-body').style.height = `${Math.max(displayRows.length * rowHeight + 100, 400)}px`;
             syncGanttScroll(listEl);
         }
-        function setupHorizontalMove(element, task, taskIndex, tasks, countWknds) {
-            element.addEventListener('mousedown', (e) => {
-                if (e.target.classList.contains('resize-handle')) return;
-                e.preventDefault(); 
-                const startX = e.clientX;
-                const initialDay = task.startDay;
-                
-                const branch = [];
-                let minStartInBranch = task.startDay;
-                
-                if (task.isParent) {
-                    let j = taskIndex + 1;
-                    while(j < tasks.length && (tasks[j].indent || 0) > (task.indent || 0)) {
-                        branch.push(tasks[j]);
-                        if (tasks[j].startDay < minStartInBranch) minStartInBranch = tasks[j].startDay;
-                        j++;
-                    }
-                }
-                element.style.cursor = 'grabbing'; document.body.style.cursor = 'grabbing';
-                let hasMoved = false;
-                const onMouseMove = (moveEvent) => {
-                    hasMoved = true;
-                    const rawShift = Math.round((moveEvent.clientX - startX) / dayWidth);
-                    const shiftDays = Math.max(-minStartInBranch, rawShift);
-                    
-                    element.style.left = task.isMilestone ? `${((initialDay + shiftDays) * dayWidth) - 12}px` : `${(initialDay + shiftDays) * dayWidth}px`;
-                    
-                    branch.forEach(childTask => {
-                        const childEl = document.getElementById('bar-' + childTask.id);
-                        if (childEl) {
-                            childEl.style.left = childTask.isMilestone ? `${((childTask.startDay + shiftDays) * dayWidth) - 12}px` : `${(childTask.startDay + shiftDays) * dayWidth}px`;
-                        }
-                    });
+        function setupTimelinePointer(handle, cursor, prepare, acceptsTarget = () => true) {
+            handle.addEventListener('pointerdown', event => {
+                if (!event.isPrimary || event.button !== 0 || !acceptsTarget(event.target) ||
+                    (mobileLayout && !mobileTimelineEditing)) return;
+                if (cancelTimelineGesture) cancelTimelineGesture();
+                event.preventDefault(); event.stopPropagation();
+                const state = prepare();
+                const startX = event.clientX, pointerId = event.pointerId;
+                const bodyCursor = document.body.style.cursor, handleCursor = handle.style.cursor;
+                let active = true, moved = false;
+                document.body.style.cursor = cursor; handle.style.cursor = cursor;
+                const finish = (commit, finalEvent) => {
+                    if (!active || (finalEvent && finalEvent.pointerId !== pointerId)) return;
+                    active = false;
+                    document.removeEventListener('pointermove', move);
+                    document.removeEventListener('pointerup', up);
+                    document.removeEventListener('pointercancel', cancel);
+                    handle.removeEventListener('lostpointercapture', cancel);
+                    window.removeEventListener('blur', cancel);
+                    cancelTimelineGesture = null;
+                    if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+                    document.body.style.cursor = bodyCursor; handle.style.cursor = handleCursor;
+                    state.restore();
+                    if (commit && moved) state.commit(Math.round((finalEvent.clientX - startX) / dayWidth));
                 };
-                const onMouseUp = (upEvent) => {
-                    if (hasMoved) {
-                        const rawShift = Math.round((upEvent.clientX - startX) / dayWidth);
-                        const shiftDays = Math.max(-minStartInBranch, rawShift);
-                        if (shiftDays !== 0) {
-                            task.startDay += shiftDays;
-                            branch.forEach(childTask => childTask.startDay += shiftDays);
-                            updateDataAndRender();
-                        } else { updateDataAndRender(); }
-                    }
-                    document.removeEventListener('mousemove', onMouseMove);
-                    document.removeEventListener('mouseup', onMouseUp);
-                    element.style.cursor = 'grab'; document.body.style.cursor = 'default';
+                const move = moveEvent => {
+                    if (moveEvent.pointerId !== pointerId) return;
+                    moved = moved || Math.abs(moveEvent.clientX - startX) > 0;
+                    state.preview(Math.round((moveEvent.clientX - startX) / dayWidth));
                 };
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
+                const up = upEvent => finish(true, upEvent);
+                const cancel = cancelEvent => finish(false, cancelEvent?.pointerId === undefined ? null : cancelEvent);
+                cancelTimelineGesture = () => finish(false);
+                document.addEventListener('pointermove', move);
+                document.addEventListener('pointerup', up);
+                document.addEventListener('pointercancel', cancel);
+                handle.addEventListener('lostpointercapture', cancel);
+                window.addEventListener('blur', cancel);
+                try { handle.setPointerCapture(pointerId); }
+                catch (error) { finish(false); showOnlineError(error); }
             });
         }
-        function setupHorizontalResize(resizer, barElement, task, countWknds) {
-            resizer.addEventListener('mousedown', (e) => {
-                e.preventDefault(); e.stopPropagation(); 
-                const startX = e.clientX;
-                const initialDuration = task.duration;
-                document.body.style.cursor = 'ew-resize';
-                const onMouseMove = (moveEvent) => {
-                    const shiftDays = Math.round((moveEvent.clientX - startX) / dayWidth);
-                    const newDuration = Math.max(1, initialDuration + shiftDays);
-                    barElement.style.width = `${newDuration * dayWidth}px`;
+        function setupHorizontalMove(element, task, taskIndex) {
+            setupTimelinePointer(element, 'grabbing', () => {
+                const group = taskMoveGroup(taskIndex);
+                const minimum = Math.min(...group.map(item => item.startDay));
+                const bars = group.map(item => ({
+                    task: item, element: document.getElementById('bar-' + item.id),
+                    left: document.getElementById('bar-' + item.id)?.style.left
+                })).filter(item => item.element);
+                return {
+                    preview: raw => {
+                        const shift = Math.max(-minimum, raw);
+                        bars.forEach(item => { item.element.style.left = ((item.task.startDay + shift) * dayWidth - (item.task.isMilestone ? 12 : 0)) + 'px'; });
+                    },
+                    restore: () => bars.forEach(item => { item.element.style.left = item.left; }),
+                    commit: shift => shiftTaskBranch(taskIndex, shift)
                 };
-                const onMouseUp = (upEvent) => {
-                    const shiftDays = Math.round((upEvent.clientX - startX) / dayWidth);
-                    const newDuration = Math.max(1, initialDuration + shiftDays);
-                    if (newDuration !== task.duration) { task.duration = newDuration; updateDataAndRender(); } 
-                    else { updateDataAndRender(); }
-                    document.removeEventListener('mousemove', onMouseMove);
-                    document.removeEventListener('mouseup', onMouseUp);
-                    document.body.style.cursor = 'default';
+            }, target => !target.closest('.resize-handle'));
+        }
+        function setupHorizontalResize(resizer, barElement, task) {
+            setupTimelinePointer(resizer, 'ew-resize', () => {
+                const duration = task.duration, width = barElement.style.width;
+                return {
+                    preview: shift => { barElement.style.width = Math.max(1, duration + shift) * dayWidth + 'px'; },
+                    restore: () => { barElement.style.width = width; },
+                    commit: shift => { task.duration = Math.max(1, duration + shift); updateDataAndRender(); }
                 };
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
             });
         }
         function initResizers() {
@@ -4339,6 +4899,32 @@ async function startOnlineTracker() {
         }
         document.getElementById('task-list').addEventListener('scroll', event => syncGanttScroll(event.currentTarget));
         document.getElementById('gantt-scroll').addEventListener('scroll', event => syncGanttScroll(event.currentTarget));
+        mobileLayoutQuery.addEventListener('change', applyAdaptiveLayout);
+        window.addEventListener('resize', () => {
+            if (adaptiveViewportWidth !== innerWidth && cancelTimelineGesture) cancelTimelineGesture();
+            adaptiveViewportWidth = innerWidth;
+            refreshMobileViewport();
+        });
+        window.visualViewport?.addEventListener('resize', refreshMobileViewport);
+        window.visualViewport?.addEventListener('scroll', refreshMobileViewport);
+        document.querySelectorAll('.toolbar-menu').forEach(menu => menu.addEventListener('toggle', () => positionMobileMenu(menu)));
+        document.getElementById('offline-cache-state').addEventListener('click', () => { if (mobileLayout) openMobileActions('device'); });
+        document.addEventListener('keydown', event => {
+            const actions = document.getElementById('mobile-actions-modal');
+            if (!actions.classList.contains('hidden')) {
+                trapMobileFocus(event, actions);
+                if (event.key === 'Escape') { event.preventDefault(); closeMobileActions(); }
+            } else if (mobileSidebarOpen) {
+                trapMobileFocus(event, document.getElementById('sidebar'));
+                if (event.key === 'Escape') { event.preventDefault(); setMobileSidebar(false); }
+            } else if (event.key === 'Escape' && cancelTimelineGesture) {
+                event.preventDefault(); cancelTimelineGesture();
+            }
+            if (mobileLayout && event.target.matches('[role="button"]') && ['Enter', ' '].includes(event.key)) {
+                event.preventDefault(); event.target.click();
+            }
+        });
+        refreshMobileViewport();
         initResizers();
         render();
         startOnlineTracker();
