@@ -934,7 +934,7 @@ function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
     if (typeof mobileSidebarOpen !== 'undefined' && mobileSidebarOpen) return true;
     if (onlineFileChoosing || onlineExporting) return true;
-    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal']
+    if (['task-modal', 'todo-edit-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
@@ -1039,7 +1039,8 @@ function renderOnlineToolbar(status) {
     select.value = onlineStore.state.activeProfileId;
     select.title = onlineStore.current().name;
     select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing || onlineExporting;
-    const actionable = status.blocked || status.conflicts.length > 0;
+    const actionable = status.blocked || status.conflicts.length > 0 ||
+        (typeof mobileLayout !== 'undefined' && mobileLayout && !!status.error);
     let badge = document.getElementById('online-status');
     if (badge.tagName !== (actionable ? 'BUTTON' : 'SPAN')) {
         const focused = document.activeElement === badge;
@@ -1048,7 +1049,7 @@ function renderOnlineToolbar(status) {
         if (actionable) { replacement.type = 'button'; replacement.onclick = openOnlineStatus; }
         else replacement.setAttribute('role', 'status');
         badge.replaceWith(replacement); badge = replacement;
-        if (focused) document.getElementById('github-connect-button').focus();
+        if (focused) document.getElementById(mobileLayout ? 'mobile-more-button' : 'github-connect-button').focus();
     }
     if (actionable) badge.disabled = onlineFileChoosing;
     const label = document.createElement('span');
@@ -1088,6 +1089,7 @@ function onlineAllowProfileChange(action) {
 }
 
 function switchOnlineProfile(id) {
+    setMobileSidebar(false, false);
     if (!onlineAllowProfileChange()) { renderOnlineToolbar(onlineStore.status()); return; }
     try { onlineStore.setActive(id); } catch (error) { showOnlineError(error); }
 }
@@ -1112,6 +1114,7 @@ function onlineProfileSummary(profile) {
 }
 
 function openOnlineProfileManager() {
+    setMobileSidebar(false, false);
     if (!onlineAllowProfileChange('manage profiles')) return;
     document.getElementById('profile-manager-error').classList.add('hidden');
     document.getElementById('profile-new-name').value = '';
@@ -1122,7 +1125,7 @@ function openOnlineProfileManager() {
 
 function closeOnlineProfileManager() {
     document.getElementById('profile-manager-modal').classList.add('hidden');
-    document.getElementById('profiles-manage-button').focus();
+    document.getElementById(mobileLayout ? 'mobile-sidebar-toggle' : 'profiles-manage-button').focus();
 }
 
 function showOnlineProfileError(error) {
@@ -1200,6 +1203,7 @@ function openOnlineStatus() {
     const conflicts = onlineStore.status().conflicts;
     if (conflicts.length) openOnlineConflict(conflicts.find(profile => profile.id === onlineStore.state.activeProfileId)?.id || conflicts[0].id);
     else if (onlineStore.blocked) alert((onlineStore.status().error?.message || 'Close other tracker tabs.') + '\n\nReload this tab after resolving the problem.');
+    else if (mobileLayout && onlineStore.status().error) openMobileToolbar('more');
     else openGitHubModal();
 }
 
@@ -1797,6 +1801,9 @@ async function startOnlineTracker() {
         #offline-cache-state { display: block; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #6b7280; font-size: 0; }
         .mobile-only { display: none; }
         #mobile-actions-modal { z-index: 106; }
+        #mobile-toolbar-modal { z-index: 90; }
+        .mobile-toolbar-content { display: flex; flex-direction: column; gap: 12px; }
+        .mobile-toolbar-content.hidden { display: none; }
         .task-bar, .milestone, .resize-handle { touch-action: none; }
         .mobile-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
         .mobile-action-grid button, .mobile-action-field button {
@@ -1812,44 +1819,50 @@ async function startOnlineTracker() {
         }
         .mobile-layout .mobile-only:not(.hidden) { display: inline-flex; }
         .mobile-layout { height: 100dvh; }
-        .mobile-layout #app-toolbar { padding: 6px 10px; gap: 6px; z-index: 50; }
+        .mobile-layout #app-toolbar { display: block; min-height: 0; padding: 6px 10px; z-index: 50; }
+        .mobile-layout #mobile-toolbar-main { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; align-items: center; gap: 6px; }
+        .mobile-layout #mobile-current-title {
+            min-width: 0; height: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            text-align: left; color: #dbeafe; font-size: 16px; font-weight: 700;
+        }
+        .mobile-layout #mobile-current-title:disabled { color: #f3f4f6; }
+        .mobile-layout #mobile-status-slot { display: flex; justify-content: center; min-width: 0; }
+        .mobile-layout #mobile-status-slot .toolbar-status { width: 44px; min-width: 0; padding: 0; }
+        .mobile-layout #mobile-status-slot .toolbar-status > span { display: none; }
         .mobile-layout .toolbar-brand { display: none; }
-        .mobile-layout #toolbar-profiles { width: auto; flex: 1; gap: 4px; }
-        .mobile-layout #profile-select { height: 44px; max-width: 150px; font-size: 14px; }
+        .mobile-layout #mobile-profile-section { display: block; padding: 12px; border-bottom: 1px solid #374151; }
+        .mobile-layout #mobile-profile-section > label { display: block; margin-bottom: 6px; font-size: 12px; color: #9ca3af; }
+        .mobile-layout #toolbar-profiles { width: 100%; gap: 8px; }
+        .mobile-layout #profile-select { flex: 1; min-width: 0; height: 44px; max-width: none; font-size: 16px; }
         .mobile-layout .toolbar-icon { width: 44px; height: 44px; }
-        .mobile-layout .toolbar-actions { width: auto; margin-left: auto; flex: 0 1 auto; gap: 4px; }
+        .mobile-layout .toolbar-actions { width: 100%; margin: 0; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 12px; }
         .mobile-layout .toolbar-action-group { display: contents; }
-        .mobile-layout #toolbar-local-controls { display: flex; gap: 0; }
+        .mobile-layout #toolbar-local-controls { display: flex; width: 100%; gap: 0; }
         .mobile-layout .toolbar-separator { display: none; }
-        .mobile-layout .toolbar-action { min-width: 44px; height: 44px; padding: 0 10px; }
+        .mobile-layout .toolbar-action { min-width: 44px; min-height: 44px; height: auto; padding: 10px; font-size: 14px; }
         .mobile-layout .toolbar-action svg, .mobile-layout .toolbar-icon svg { width: 20px; height: 20px; }
+        .mobile-layout #mobile-more-content .toolbar-action { width: 100%; justify-content: flex-start; }
+        .mobile-layout #mobile-more-content #backup-menu > summary { justify-content: space-between; }
         .mobile-layout #backup-menu > summary > .icon-svg-sm { display: none; }
-        .mobile-layout span.toolbar-status { min-width: 32px; padding: 0 6px; }
-        .mobile-layout .toolbar-button-label, .mobile-layout #github-connect-label,
-        .mobile-layout #json-file-label, .mobile-layout .toolbar-status:not(.toolbar-status-attention) > span { display: none; }
-        .mobile-layout #btn-sync { gap: 4px; }
-        .mobile-layout #btn-sync::after { content: attr(data-file-state); font-size: 10px; font-weight: 700; }
+        .mobile-layout #btn-sync { flex: 1; min-width: 0; max-width: none; white-space: normal; }
+        .mobile-layout #json-file-label { white-space: normal; }
         .mobile-layout #offline-cache-state {
             width: 44px; height: 44px; padding: 18px; background-clip: content-box; cursor: pointer;
         }
         .mobile-layout #offline-cache-state:focus-visible { outline: 2px solid #93c5fd; }
-        .mobile-layout #toolbar-help-button { width: 44px; }
-        .mobile-layout #toolbar-project-controls { min-width: 0; flex-basis: 100%; flex-wrap: wrap; gap: 4px; }
-        .mobile-layout #current-project-title { flex: 1 0 100%; min-width: 0; max-width: none; font-size: 16px; }
-        .mobile-layout #current-project-title > span { min-height: 36px; }
-        .mobile-layout #date-picker-container { display: none !important; }
-        .mobile-layout #mobile-project-date { min-width: 44px; }
-        .mobile-layout #mobile-project-date svg { width: 20px; height: 20px; }
+        .mobile-layout #toolbar-help-button { border-radius: 4px; }
+        .mobile-layout #online-update-button { margin-left: 0; }
+        .mobile-layout #toolbar-project-controls { display: none !important; }
         .mobile-layout .toolbar-view-control { min-height: 44px; height: 44px; padding: 0 8px; gap: 4px; }
-        .mobile-layout #zoom-menu > summary { min-width: 94px; }
-        .mobile-layout #subtasks-menu > summary { min-width: 44px; }
-        .mobile-layout #subtasks-menu > summary svg { width: 20px; height: 20px; }
-        .mobile-layout #view-toggle { height: 44px; }
-        .mobile-layout #view-toggle button { min-height: 44px; padding: 0 10px; }
+        .mobile-layout #mobile-view-content .toolbar-view-control { width: 100%; font-size: 14px; }
+        .mobile-layout #mobile-view-content .toolbar-view-control > .mobile-only { display: none; }
+        .mobile-layout #mobile-view-content > button { min-height: 44px; padding: 10px; border-radius: 4px; text-align: left; background: #374151; }
+        .mobile-layout #mobile-view-content > button[aria-pressed="true"] { background: #1d4ed8; }
+        .mobile-layout #mobile-zoom-slot:not(.hidden) > div, .mobile-layout #zoom-menu { width: 100%; }
         .mobile-layout .toolbar-menu { position: static; }
         .mobile-layout .toolbar-menu-panel {
             position: fixed; width: max-content; min-width: 0; max-width: calc(100vw - 24px);
-            margin: 0; overflow-y: auto; overscroll-behavior: contain;
+            margin: 0; overflow-y: auto; overscroll-behavior: contain; z-index: 2;
         }
         .mobile-layout .toolbar-menu-panel > button { min-height: 44px; font-size: 14px; }
         .mobile-layout #backup-menu > .toolbar-menu-panel { min-width: 224px; }
@@ -1874,11 +1887,12 @@ async function startOnlineTracker() {
         .mobile-layout #overview-content { grid-template-columns: minmax(0, 1fr); }
         .mobile-layout #overview-view h2, .mobile-layout #todo-view h2 { font-size: 26px; }
         .mobile-layout #mobile-workspace-controls:not(.hidden) {
-            display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px;
+            display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; align-items: center; gap: 4px; padding: 6px 10px;
             background: #111827; border-bottom: 1px solid #374151; flex-shrink: 0;
         }
-        #mobile-workspace-controls button { min-height: 44px; padding: 8px 12px; border-radius: 6px; }
+        #mobile-workspace-controls button { min-width: 0; height: 44px; padding: 8px; border-radius: 6px; font-size: 14px; }
         #mobile-workspace-controls button[aria-pressed="true"] { background: #2563eb; color: white; }
+        .timeline-editing #mobile-timeline-button::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: #fbbf24; }
         #workspace.desktop-capture #task-panel { transition: none; }
         .mobile-layout #workspace:not(.desktop-capture) #task-resizer { display: none; }
         .mobile-layout #workspace:not(.desktop-capture) #task-panel {
@@ -1945,7 +1959,6 @@ async function startOnlineTracker() {
         .mobile-layout #modal-editor { flex: 1; min-height: 100px; max-height: 32vh; }
         .mobile-layout #todo-toast-wrap { left: 10px; right: 10px; max-height: 50dvh; overflow-y: auto; z-index: 45; }
         .mobile-layout #todo-toast-wrap > div { max-width: 100%; }
-        @media (min-width: 701px) { .mobile-layout #current-project-title { flex: 1; min-width: 120px; } }
         @media (prefers-reduced-motion: reduce) { .mobile-layout #sidebar { transition: none; } }
         @media (max-width: 700px) {
             #app-toolbar { padding: 8px 12px; }
@@ -1970,9 +1983,6 @@ async function startOnlineTracker() {
 <body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden font-sans text-sm relative online-starting">
     <header id="app-toolbar">
         <div id="toolbar-profiles" inert>
-            <button id="mobile-sidebar-toggle" type="button" onclick="setMobileSidebar(true)" class="mobile-only toolbar-icon bg-gray-700 rounded" aria-label="Open projects and To Do" aria-controls="sidebar" aria-expanded="false">
-                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-            </button>
             <h1 class="toolbar-brand text-white">Project Tracker</h1>
             <select id="profile-select" onchange="switchOnlineProfile(this.value)" class="bg-gray-900 text-white border border-gray-600 rounded px-2 py-1.5 text-xs font-semibold" aria-label="Active profile"></select>
             <button id="profiles-manage-button" onclick="openOnlineProfileManager()" class="toolbar-icon bg-gray-700 hover:bg-gray-600 rounded text-gray-200" title="Manage profiles" aria-label="Manage profiles">
@@ -1985,9 +1995,6 @@ async function startOnlineTracker() {
                 <svg class="icon-svg text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                 <input type="date" id="project-start-date" class="bg-transparent text-gray-300 text-xs outline-none cursor-pointer" onchange="updateProjectDate(this.value)" aria-label="Project start date">
             </div>
-            <button id="mobile-project-date" type="button" class="mobile-only hidden toolbar-view-control" onclick="openMobileActions('project',activeProjectId)" aria-label="Project start date and actions">
-                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M7 3v4M17 3v4"/></svg>
-            </button>
             <div class="flex items-center" id="zoom-controls" style="display:none;">
                 <details id="zoom-menu" class="relative toolbar-menu">
                     <summary class="toolbar-view-control" aria-haspopup="menu" aria-label="Gantt zoom"><span id="zoom-label">Day View</span></summary>
@@ -2010,7 +2017,7 @@ async function startOnlineTracker() {
                 <button onclick="setViewMode('summary')" id="btn-view-summary" class="px-3 py-1.5 text-xs font-semibold text-gray-400 hover:bg-gray-700 hover:text-white transition-colors">Summary</button>
             </div>
         </div>
-        <div class="toolbar-actions">
+        <div id="toolbar-actions" class="toolbar-actions">
             <div class="toolbar-action-group">
                 <details id="backup-menu" class="relative toolbar-menu">
                     <summary class="toolbar-action" aria-haspopup="menu" aria-label="Backups and exports" title="Backups and current-view exports">
@@ -2030,7 +2037,7 @@ async function startOnlineTracker() {
                 <button id="online-recovery-button" onclick="openOnlineRecovery()" class="hidden toolbar-action" aria-label="Recovery"><svg class="mobile-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/></svg><span class="toolbar-button-label">Recovery</span></button>
             </div>
             <span class="toolbar-separator" aria-hidden="true"></span>
-            <div class="toolbar-action-group">
+            <div id="toolbar-cloud-controls" class="toolbar-action-group">
                 <button id="github-connect-button" onclick="openGitHubModal()" class="toolbar-action">
                     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.53v-2.07c-3.1.67-3.75-1.32-3.75-1.32-.5-1.28-1.24-1.62-1.24-1.62-1.02-.7.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.24.93.1-.72.39-1.21.71-1.49-2.47-.28-5.07-1.24-5.07-5.5 0-1.21.43-2.2 1.15-2.98-.12-.28-.5-1.4.11-2.92 0 0 .94-.3 3.05 1.14a10.6 10.6 0 0 1 5.56 0c2.12-1.44 3.05-1.14 3.05-1.14.61 1.53.23 2.64.11 2.92.72.78 1.15 1.77 1.15 2.98 0 4.27-2.6 5.21-5.08 5.49.4.35.75 1.02.75 2.06V22c0 .3.2.64.77.53A11.1 11.1 0 0 0 12 .9Z"/></svg>
                     <span id="github-connect-label">Connect GitHub</span>
@@ -2050,8 +2057,19 @@ async function startOnlineTracker() {
             <span class="toolbar-separator" aria-hidden="true"></span>
             <button id="toolbar-help-button" onclick="openHelpModal()" class="toolbar-action" title="Help" aria-label="Help">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                <span class="mobile-only">Help</span>
             </button>
             <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
+        </div>
+        <div id="mobile-toolbar-main" class="mobile-only">
+            <button id="mobile-sidebar-toggle" type="button" onclick="setMobileSidebar(true)" class="toolbar-icon bg-gray-700 rounded" aria-label="Open profiles, projects and To Do" aria-controls="sidebar" aria-expanded="false">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <button id="mobile-current-title" type="button" onclick="openMobileActions('project',activeProjectId)" disabled>Overview</button>
+            <div id="mobile-status-slot"></div>
+            <button id="mobile-more-button" type="button" onclick="openMobileToolbar('more')" class="toolbar-icon bg-gray-700 rounded" aria-label="More" aria-haspopup="dialog" aria-controls="mobile-toolbar-modal" aria-expanded="false">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
+            </button>
         </div>
     </header>
     <div id="online-message" role="alert" class="hidden shrink-0 bg-amber-950 border-b border-amber-800 text-amber-200 px-4 py-2 text-xs"></div>
@@ -2059,6 +2077,10 @@ async function startOnlineTracker() {
     <div id="tracker-shell" class="flex flex-1 min-h-0 overflow-hidden" inert>
     <aside id="sidebar" class="bg-gray-800 flex flex-col z-20 shrink-0 overflow-hidden transition-[width] duration-75" style="width: 256px;">
         <div class="min-w-[200px] h-full flex flex-col">
+            <div id="mobile-profile-section" class="mobile-only">
+                <label for="profile-select">Profile</label>
+                <div id="mobile-profile-slot"></div>
+            </div>
             <div class="px-3 py-2 flex justify-between items-center shrink-0">
                 <h2 class="text-xs font-semibold uppercase tracking-wide text-gray-400">Projects</h2>
                 <button id="mobile-sidebar-close" type="button" class="mobile-only toolbar-icon" onclick="setMobileSidebar(false)" aria-label="Close projects">&times;</button>
@@ -2085,8 +2107,10 @@ async function startOnlineTracker() {
         <div id="mobile-workspace-controls" class="mobile-only hidden" aria-label="Project workspace">
             <button type="button" id="mobile-tasks-button" onclick="setMobilePane('tasks')" aria-pressed="true">Tasks</button>
             <button type="button" id="mobile-timeline-button" onclick="setMobilePane('timeline')" aria-pressed="false">Timeline</button>
-            <button type="button" id="mobile-weekends-button" onclick="toggleCountWeekends()" aria-pressed="true">Calendar days</button>
-            <button type="button" id="mobile-timeline-edit" onclick="setMobileTimelineEditing(!mobileTimelineEditing)" aria-pressed="false" class="hidden">Move / resize</button>
+            <button type="button" id="mobile-summary-button" onclick="setMobilePane('summary')" aria-pressed="false">Summary</button>
+            <button type="button" id="mobile-view-button" onclick="openMobileToolbar('view')" class="toolbar-icon" aria-label="View options" aria-haspopup="dialog" aria-controls="mobile-toolbar-modal" aria-expanded="false">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="#111827"/><circle cx="16" cy="12" r="2" fill="#111827"/><circle cx="10" cy="18" r="2" fill="#111827"/></svg>
+            </button>
         </div>
         <!-- View 0: Overview -->
         <div class="flex-1 overflow-y-auto bg-gray-900 p-8 hidden" id="overview-view">
@@ -2135,6 +2159,26 @@ async function startOnlineTracker() {
             <div id="summary-content" class="max-w-4xl mx-auto pb-20 relative"></div>
         </div>
     </main>
+    </div>
+    <div id="mobile-toolbar-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center" onclick="if(event.target===this) closeMobileToolbar()">
+        <div class="bg-gray-800 flex flex-col" role="dialog" aria-modal="true" aria-labelledby="mobile-toolbar-title">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center shrink-0">
+                <h3 id="mobile-toolbar-title" class="font-bold text-lg">More</h3>
+                <button id="mobile-toolbar-close" type="button" onclick="closeMobileToolbar()" class="toolbar-icon" aria-label="Close toolbar options">&times;</button>
+            </div>
+            <div class="p-4 overflow-y-auto min-h-0">
+                <div id="mobile-more-content" class="mobile-toolbar-content">
+                    <p id="mobile-more-status" class="text-sm text-gray-300" aria-live="polite"></p>
+                </div>
+                <div id="mobile-view-content" class="mobile-toolbar-content hidden">
+                    <div id="mobile-zoom-slot"></div>
+                    <div id="mobile-subtasks-slot"></div>
+                    <button type="button" id="mobile-weekends-button" onclick="toggleCountWeekends()" aria-pressed="true">Calendar days</button>
+                    <button type="button" id="mobile-timeline-edit" onclick="setMobileTimelineEditing(!mobileTimelineEditing);closeMobileToolbar()" aria-pressed="false" class="hidden">Move / resize</button>
+                    <p id="mobile-timeline-hint" class="text-sm text-gray-300 hidden">Scroll safely by default. Enable Move / resize only when you want to change task dates. An amber dot marks editing mode.</p>
+                </div>
+            </div>
+        </div>
     </div>
     <div id="mobile-actions-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center" onclick="if(event.target===this) closeMobileActions()">
         <div class="online-modal bg-gray-800 rounded-lg shadow-xl w-[550px] max-w-[90%] flex flex-col border border-gray-600" role="dialog" aria-modal="true" aria-labelledby="mobile-actions-title">
@@ -2257,11 +2301,13 @@ async function startOnlineTracker() {
                 <h3 class="text-lg font-bold text-white mb-2">Phones and touch screens</h3>
                 <p class="mb-2">The interface adapts automatically to a narrow browser window, or a medium-sized touch-first screen, including phone landscape. Wide desktop windows keep the original layout and mouse controls. No PWA or home-screen installation is required.</p>
                 <ul>
-                    <li><b>Projects:</b> Tap the three-line button beside the profile selector to open Projects, Overview and To Do. Tap a project to close the drawer and use the full screen.</li>
-                    <li><b>Compact toolbar:</b> The GitHub logo opens settings. Sync has a separate indicator; conflicts and errors keep explicit messages. Backups and Recovery use icons. The calendar icon opens the project start date and project actions. The file icon still shows <b>ON / OFF</b>; tap its adjacent offline dot for device-storage details. Menus retain their action names.</li>
-                    <li><b>Tasks / Timeline:</b> Gantt keeps both full-width task cards and a scrollable timeline. Tap a task name or its three-dot actions button for notes, progress, hierarchy, branch ordering, dates, duplication and deletion. Calendar / Working days changes the displayed duration; the duration editor uses calendar days.</li>
-                    <li><b>Safe touch scheduling:</b> Timeline starts in browsing mode, so swiping scrolls without changing dates. Choose <b>Move / resize</b> to drag bars and their right edges; choose <b>Browse / scroll</b> afterward. Cancellation or changing layouts discards an unfinished drag. Moving or reordering a parent includes hidden descendants.</li>
-                    <li><b>To Do:</b> Tap an item's three-dot button for editing, moving, copying, ordering, calendar export and deletion. Export the selected day and Overdue items from Backups, as on desktop.</li>
+                    <li><b>Profiles and projects:</b> The three-line button opens a drawer with a full-width profile selector, profile management, Projects, Overview and To Do. Selecting a profile or view closes the drawer.</li>
+                    <li><b>Two-row project header:</b> The first row shows the project name, separate save-status indicator and <b>More</b> button. Tap the project name for start-date editing and project actions, including notes. The second row combines <b>Tasks / Timeline / Summary</b> and <b>View options</b>. To Do and Overview need only the first row.</li>
+                    <li><b>More:</b> Open the three-dot header button for Backups, Recovery when available, GitHub settings, JSON auto-save and Help. JSON keeps its explicit <b>ON / OFF</b> label and adjacent offline dot; tap the dot for storage details. Conflicts and errors retain visible messages and a directly tappable warning.</li>
+                    <li><b>View options:</b> The sliders button contains Subtasks and Calendar / Working days. Timeline also offers Day / Week / Month zoom and <b>Move / resize</b>. Calendar / Working days changes only the displayed duration; the duration editor always uses calendar days.</li>
+                    <li><b>Tasks / Timeline / Summary:</b> Switch directly between full-width task cards, the scrollable chart and the project summary. Tap a task name or its three-dot actions button for notes, progress, hierarchy, branch ordering, dates, duplication and deletion.</li>
+                    <li><b>Safe touch scheduling:</b> Timeline starts in browsing mode, so swiping scrolls without changing dates. In <b>View options</b>, choose <b>Move / resize</b> to drag bars and their right edges; choose <b>Browse / scroll</b> afterward. An amber dot on Timeline marks editing mode. Cancellation or changing layouts discards an unfinished drag. Moving or reordering a parent includes hidden descendants.</li>
+                    <li><b>To Do:</b> Tap an item's three-dot button for editing, moving, copying, ordering, calendar export and deletion. Export the selected day and Overdue items from <b>More &gt; Backups</b>.</li>
                     <li><b>Same data and exports:</b> Rotation does not submit or discard open editors. Task/Timeline choice is browser-local, not cloud-synced. Chart exports retain their desktop report layout, not a cropped phone screen.</li>
                 </ul>
                 <h3 class="text-lg font-bold text-white mb-2">Timeline Navigation</h3>
@@ -2511,6 +2557,7 @@ async function startOnlineTracker() {
         const mobileLayoutQuery = matchMedia('(max-width: 700px), (max-width: 1024px) and (pointer: coarse)');
         let mobileLayout = mobileLayoutQuery.matches;
         let mobileSidebarOpen = false;
+        let mobileToolbarPanel = null;
         let mobileTimelineEditing = false;
         let mobileProjectId = null;
         let mobileActionsContext = null;
@@ -2544,8 +2591,22 @@ async function startOnlineTracker() {
         function refreshMobileUI() {
             document.body.classList.toggle('mobile-layout', mobileLayout);
             const pane = readOnlineView('mobilePane', 'tasks');
-            const timeline = pane === 'timeline';
-            const project = !['overview', 'todo'].includes(activeProjectId);
+            const summary = currentViewMode === 'summary';
+            const timeline = !summary && pane === 'timeline';
+            const project = data.projects.find(item => item.id === activeProjectId);
+            if (!mobileLayout || (!project && mobileToolbarPanel === 'view')) closeMobileToolbar(false);
+            const placements = [
+                ['toolbar-profiles', 'mobile-profile-slot', 'app-toolbar', 'toolbar-project-controls'],
+                ['toolbar-actions', 'mobile-more-content', 'app-toolbar', null],
+                ['online-status', 'mobile-status-slot', 'toolbar-cloud-controls', 'online-retry'],
+                ['subtasks-menu', 'mobile-subtasks-slot', 'toolbar-project-controls', 'view-toggle'],
+                ['zoom-controls', 'mobile-zoom-slot', 'toolbar-project-controls', 'subtasks-menu']
+            ];
+            for (const [id, compactParent, desktopParent, before] of placements) {
+                const element = document.getElementById(id);
+                const parent = document.getElementById(mobileLayout ? compactParent : desktopParent);
+                if (element.parentElement !== parent) parent.insertBefore(element, !mobileLayout && before ? document.getElementById(before) : null);
+            }
             const projectKey = onlineStore.current().id + ':' + activeProjectId;
             if (projectKey !== mobileProjectId) {
                 mobileProjectId = projectKey;
@@ -2554,19 +2615,30 @@ async function startOnlineTracker() {
             setMobileSidebar(mobileSidebarOpen, false);
             document.body.classList.toggle('mobile-timeline', mobileLayout && timeline);
             document.body.classList.toggle('timeline-editing', mobileLayout && mobileTimelineEditing);
-            document.getElementById('mobile-workspace-controls').classList.toggle('hidden', !mobileLayout || !project || currentViewMode !== 'gantt');
-            const projectDate = document.getElementById('mobile-project-date');
-            projectDate.classList.toggle('hidden', !project);
-            projectDate.title = 'Project start date: ' + (data.projects.find(item => item.id === activeProjectId)?.startDate || '');
-            document.getElementById('mobile-tasks-button').setAttribute('aria-pressed', String(!timeline));
+            const locked = document.getElementById('tracker-shell').inert;
+            document.getElementById('mobile-sidebar-toggle').disabled = locked || onlineFileChoosing;
+            document.getElementById('mobile-workspace-controls').classList.toggle('hidden', !mobileLayout || !project);
+            document.getElementById('mobile-workspace-controls').inert = locked;
+            const title = document.getElementById('mobile-current-title');
+            title.textContent = project ? project.name : activeProjectId === 'todo' ? 'To Do' : 'Overview';
+            title.title = title.textContent;
+            title.disabled = !project || locked;
+            title.setAttribute('aria-label', title.textContent + (project ? '. Project details and start date' : ''));
+            document.getElementById('mobile-tasks-button').setAttribute('aria-pressed', String(!summary && !timeline));
             document.getElementById('mobile-timeline-button').setAttribute('aria-pressed', String(timeline));
+            document.getElementById('mobile-timeline-button').setAttribute('aria-label', mobileTimelineEditing ? 'Timeline, Move / resize enabled' : 'Timeline');
+            document.getElementById('mobile-summary-button').setAttribute('aria-pressed', String(summary));
+            document.getElementById('mobile-zoom-slot').classList.toggle('hidden', !timeline);
             const edit = document.getElementById('mobile-timeline-edit');
             edit.classList.toggle('hidden', !timeline);
             edit.setAttribute('aria-pressed', String(mobileTimelineEditing));
             edit.textContent = mobileTimelineEditing ? 'Browse / scroll' : 'Move / resize';
-            const weekends = data.projects.find(item => item.id === activeProjectId)?.countWeekends !== false;
+            document.getElementById('mobile-timeline-hint').classList.toggle('hidden', !timeline);
+            const weekends = project?.countWeekends !== false;
             document.getElementById('mobile-weekends-button').textContent = weekends ? 'Calendar days' : 'Working days';
             document.getElementById('mobile-weekends-button').setAttribute('aria-pressed', String(weekends));
+            document.getElementById('mobile-more-status').textContent = document.getElementById('online-message').textContent ||
+                document.getElementById('online-status').getAttribute('aria-label') || 'Save status';
             const dot = document.getElementById('offline-cache-state');
             dot.setAttribute('role', mobileLayout ? 'button' : 'status');
             dot.setAttribute('aria-label', (dot.title || 'Offline cache status') + (mobileLayout ? '. Show device storage details' : ''));
@@ -2580,10 +2652,10 @@ async function startOnlineTracker() {
             document.querySelectorAll('.toolbar-menu').forEach(positionMobileMenu);
         }
         function setMobilePane(pane) {
-            if (!['tasks', 'timeline'].includes(pane)) { showOnlineError(new Error('Unknown mobile workspace view.')); return; }
+            if (!['tasks', 'timeline', 'summary'].includes(pane)) { showOnlineError(new Error('Unknown mobile workspace view.')); return; }
             mobileTimelineEditing = false;
-            writeOnlineView('mobilePane', pane);
-            render();
+            if (pane !== 'summary') writeOnlineView('mobilePane', pane);
+            setViewMode(pane === 'summary' ? 'summary' : 'gantt');
         }
         function setMobileTimelineEditing(enabled) {
             if (cancelTimelineGesture) cancelTimelineGesture();
@@ -2591,6 +2663,7 @@ async function startOnlineTracker() {
             refreshMobileUI();
         }
         function setMobileSidebar(open, restoreFocus = true) {
+            if (open) closeMobileToolbar(false);
             if (open && cancelTimelineGesture) cancelTimelineGesture();
             open = !!open && mobileLayout && !document.getElementById('tracker-shell').inert;
             const changed = open !== mobileSidebarOpen;
@@ -2599,12 +2672,42 @@ async function startOnlineTracker() {
             document.getElementById('mobile-sidebar-backdrop').classList.toggle('hidden', !open);
             document.getElementById('mobile-sidebar-toggle').setAttribute('aria-expanded', String(open));
             document.getElementById('sidebar').inert = mobileLayout && !open;
-            document.getElementById('app-toolbar').inert = open;
-            document.getElementById('tracker-main').inert = open;
+            document.getElementById('app-toolbar').inert = open || !!mobileToolbarPanel;
+            document.getElementById('tracker-main').inert = open || !!mobileToolbarPanel;
             if (changed && open) requestAnimationFrame(() => {
                 if (mobileSidebarOpen) document.getElementById('mobile-sidebar-close').focus({ preventScroll: true });
             });
             else if (changed && restoreFocus && mobileLayout) document.getElementById('mobile-sidebar-toggle').focus({ preventScroll: true });
+        }
+        function openMobileToolbar(panel) {
+            if (!mobileLayout) return;
+            if (!['more', 'view'].includes(panel)) { showOnlineError(new Error('Unknown toolbar panel.')); return; }
+            if (panel === 'view' && !data.projects.some(project => project.id === activeProjectId)) {
+                showOnlineError(new Error('Open a project before changing its view options.')); return;
+            }
+            if (cancelTimelineGesture) cancelTimelineGesture();
+            setMobileSidebar(false, false);
+            document.querySelectorAll('.toolbar-menu[open]').forEach(menu => { menu.open = false; });
+            mobileToolbarPanel = panel;
+            document.getElementById('mobile-toolbar-title').textContent = panel === 'more' ? 'More' : 'View options';
+            document.getElementById('mobile-more-content').classList.toggle('hidden', panel !== 'more');
+            document.getElementById('mobile-view-content').classList.toggle('hidden', panel !== 'view');
+            document.getElementById('mobile-more-button').setAttribute('aria-expanded', String(panel === 'more'));
+            document.getElementById('mobile-view-button').setAttribute('aria-expanded', String(panel === 'view'));
+            document.getElementById('mobile-toolbar-modal').classList.remove('hidden');
+            refreshMobileUI();
+            document.getElementById('mobile-toolbar-close').focus({ preventScroll: true });
+        }
+        function closeMobileToolbar(restoreFocus = true) {
+            if (!mobileToolbarPanel) return;
+            const panel = mobileToolbarPanel;
+            mobileToolbarPanel = null;
+            document.getElementById('mobile-toolbar-modal').classList.add('hidden');
+            document.querySelectorAll('#mobile-toolbar-modal .toolbar-menu[open]').forEach(menu => { menu.open = false; });
+            document.getElementById('mobile-more-button').setAttribute('aria-expanded', 'false');
+            document.getElementById('mobile-view-button').setAttribute('aria-expanded', 'false');
+            setMobileSidebar(false, false);
+            if (restoreFocus && mobileLayout) document.getElementById(panel === 'more' ? 'mobile-more-button' : 'mobile-view-button').focus({ preventScroll: true });
         }
         function applyAdaptiveLayout() {
             const changed = mobileLayout !== mobileLayoutQuery.matches;
@@ -2629,6 +2732,7 @@ async function startOnlineTracker() {
                     }
                 });
             }
+            if (changed) renderOnlineToolbar(onlineStore.status());
             refreshMobileViewport();
         }
         function mobileActionError(error) {
@@ -2675,6 +2779,7 @@ async function startOnlineTracker() {
         function openMobileActions(kind, id = null, date = null) {
             if (cancelTimelineGesture) cancelTimelineGesture();
             mobileActionsReturnFocus = document.activeElement;
+            closeMobileToolbar(false);
             setMobileSidebar(false, false);
             document.querySelectorAll('.toolbar-menu[open]').forEach(menu => { menu.open = false; });
             const content = document.getElementById('mobile-actions-content');
@@ -2823,7 +2928,7 @@ async function startOnlineTracker() {
         }
         function trapMobileFocus(event, container) {
             if (event.key !== 'Tab') return;
-            const elements = Array.from(container.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]'))
+            const elements = Array.from(container.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]'))
                 .filter(element => element.getClientRects().length);
             if (!elements.length) return;
             const first = elements[0], last = elements[elements.length - 1];
@@ -4909,11 +5014,20 @@ async function startOnlineTracker() {
         window.visualViewport?.addEventListener('scroll', refreshMobileViewport);
         document.querySelectorAll('.toolbar-menu').forEach(menu => menu.addEventListener('toggle', () => positionMobileMenu(menu)));
         document.getElementById('offline-cache-state').addEventListener('click', () => { if (mobileLayout) openMobileActions('device'); });
+        document.getElementById('mobile-more-content').addEventListener('click', event => {
+            const action = event.target.closest('button, #offline-cache-state');
+            if (action && !action.disabled) closeMobileToolbar();
+        }, true);
         document.addEventListener('keydown', event => {
             const actions = document.getElementById('mobile-actions-modal');
             if (!actions.classList.contains('hidden')) {
                 trapMobileFocus(event, actions);
                 if (event.key === 'Escape') { event.preventDefault(); closeMobileActions(); }
+            } else if (mobileToolbarPanel) {
+                trapMobileFocus(event, document.getElementById('mobile-toolbar-modal'));
+                if (event.key === 'Escape' && !document.querySelector('#mobile-toolbar-modal .toolbar-menu[open]')) {
+                    event.preventDefault(); closeMobileToolbar();
+                }
             } else if (mobileSidebarOpen) {
                 trapMobileFocus(event, document.getElementById('sidebar'));
                 if (event.key === 'Escape') { event.preventDefault(); setMobileSidebar(false); }
