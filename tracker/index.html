@@ -95,11 +95,12 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         });
     }
     function emptyData() {
-        return { projects: [], tasks: {}, todos: {}, settings: { sound: true, digestTime: '18:00' } };
+        return { projects: [], tasks: {}, todos: {}, events: [], settings: { sound: true, digestTime: '18:00' } };
     }
     function normalizeData(input) {
         requireValue(isObject(input) && Array.isArray(input.projects) && isObject(input.tasks), 'Invalid tracker data: projects and tasks are required.');
         requireValue(input.todos === undefined || isObject(input.todos), 'Invalid To Do data.');
+        requireValue(input.events === undefined || Array.isArray(input.events), 'Invalid calendar event list.');
         const output = emptyData();
         const projectIds = new Set();
         output.projects = input.projects.map(project => {
@@ -171,6 +172,18 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             });
             if (!output.todos[date].length) delete output.todos[date];
         });
+        const eventIds = new Set();
+        output.events = (input.events || []).map(event => {
+            requireValue(isObject(event) && validId(event.id) && !eventIds.has(event.id), 'Invalid or duplicate calendar event ID.');
+            requireValue(typeof event.title === 'string' && event.title.trim() && event.title.trim().length <= 200,
+                'Each calendar event needs a title (maximum 200 characters).');
+            requireValue(validDate(event.startDate) && validDate(event.endDate) && event.endDate >= event.startDate,
+                'A calendar event needs valid start/end dates, with the end on or after the start.');
+            requireValue(event.description === undefined || typeof event.description === 'string', 'Invalid calendar event notes.');
+            eventIds.add(event.id);
+            return { id: event.id, title: event.title.trim(), startDate: event.startDate, endDate: event.endDate,
+                description: sanitizeRichText(event.description || '') };
+        });
         if (input.settings !== undefined) {
             requireValue(isObject(input.settings), 'Invalid profile settings.');
             requireValue(input.settings.sound === undefined || typeof input.settings.sound === 'boolean', 'Invalid sound setting.');
@@ -182,12 +195,13 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         return output;
     }
     function dataVersion(data) {
+        if (data.events?.length) return 3;
         return Object.values(data.tasks).some(tasks => tasks.some(task => task.previousProgress !== undefined)) ||
             Object.values(data.todos || {}).some(items => items.some(item =>
                 item.taskId !== undefined || item.copiedFrom !== undefined || item.description !== undefined)) ? 2 : 1;
     }
     function normalizeDocument(input, expectedId) {
-        requireValue(isObject(input) && [1, 2].includes(input.schemaVersion) && isObject(input.profile),
+        requireValue(isObject(input) && [1, 2, 3].includes(input.schemaVersion) && isObject(input.profile),
             'Unsupported profile file format. Update the tracker on this device before opening this profile.');
         requireValue(validId(input.profile.id) && (!expectedId || input.profile.id === expectedId), 'Unexpected profile file ID.');
         requireValue(typeof input.profile.name === 'string' && input.profile.name.trim() && input.profile.name.length <= 120, 'Invalid profile name (maximum 120 characters).');
@@ -231,7 +245,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         });
     }
     function normalizeState(input) {
-        requireValue(isObject(input) && [1, 2].includes(input.schemaVersion) && Array.isArray(input.profiles) && input.profiles.length,
+        requireValue(isObject(input) && [1, 2, 3].includes(input.schemaVersion) && Array.isArray(input.profiles) && input.profiles.length,
             'Unsupported or invalid browser cache. Update the tracker first; retain its recovery copy before clearing anything.');
         const ids = new Set();
         const profiles = input.profiles.map(item => {
@@ -298,7 +312,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             return { documents, recovery: normalizeRecovery(input.recovery === undefined ? [] : input.recovery) };
         }
         const document = input && input.profile ? normalizeDocument(input)
-            : { schemaVersion: 1, profile: { id: makeId(), name: 'Imported' }, data: normalizeData(input) };
+            : normalizeDocument({ schemaVersion: 1, profile: { id: makeId(), name: 'Imported' }, data: input });
         return { documents: [document], recovery: [] };
     }
     function mergeData(current, incoming) {
@@ -328,7 +342,71 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             if (!merged.todos[date]) merged.todos[date] = [];
             merged.todos[date].push(added); todoIds.set(added.id, { date, item: added });
         }));
+        const eventIds = new Map(merged.events.map(event => [event.id, event]));
+        imported.events.forEach(event => {
+            const existing = eventIds.get(event.id);
+            if (existing && same(existing, event)) return;
+            const added = clone(event);
+            if (existing) added.id = makeId();
+            merged.events.push(added); eventIds.set(added.id, added);
+        });
         return normalizeData(merged);
+    }
+    function calendarDate(value, offset = 0) {
+        requireValue(validDate(value) && Number.isSafeInteger(offset), 'Choose a valid calendar date and whole-day offset.');
+        const date = new Date(value + 'T12:00:00');
+        date.setDate(date.getDate() + offset);
+        requireValue(Number.isFinite(date.getTime()), 'The date is outside the supported calendar range.');
+        const result = String(date.getFullYear()).padStart(4, '0') + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+        requireValue(validDate(result), 'The date is outside the supported four-digit calendar range.');
+        return result;
+    }
+    function calendarDaysBetween(start, end) {
+        requireValue(validDate(start) && validDate(end), 'Choose valid calendar dates.');
+        return (new Date(end + 'T12:00:00Z') - new Date(start + 'T12:00:00Z')) / 86400000;
+    }
+    function taskCalendarDates(project, task) {
+        const startDate = calendarDate(project.startDate, task.startDay);
+        return { startDate, endDate: calendarDate(startDate, Math.max(0, task.duration - 1)) };
+    }
+    function calendarEntries(data, start, end, options = {}) {
+        requireValue(validDate(start) && validDate(end) && end >= start, 'Choose a valid calendar date range.');
+        const layers = { todos: true, projects: true, events: true, ...options.layers };
+        requireValue(Object.values(layers).every(value => typeof value === 'boolean'), 'Choose which calendar layers to display.');
+        const scope = options.taskScope || 'all', projectId = options.projectId || '';
+        requireValue(['all', 'main', 'leaf'].includes(scope), 'Choose which Gantt task levels to display.');
+        requireValue(!projectId || data.projects.some(project => project.id === projectId), 'The calendar project filter no longer exists.');
+        const entries = [];
+        const add = entry => {
+            if (entry.startDate <= end && entry.endDate >= start &&
+                (options.showCompleted !== false || !entry.done)) entries.push(entry);
+        };
+        if (layers.projects) data.projects.forEach(project => {
+            if (projectId && project.id !== projectId) return;
+            const tasks = data.tasks[project.id] || [];
+            tasks.forEach((task, index) => {
+                const parent = index + 1 < tasks.length && (tasks[index + 1].indent || 0) > (task.indent || 0);
+                if (scope === 'main' && (task.indent || 0) !== 0 || scope === 'leaf' && parent) return;
+                const dates = taskCalendarDates(project, task);
+                add({ kind: 'task', id: task.id, projectId: project.id, title: task.name,
+                    startDate: dates.startDate, endDate: task.isMilestone ? dates.startDate : dates.endDate,
+                    done: task.progress === 100, progress: task.progress, milestone: task.isMilestone, parent });
+            });
+        });
+        if (layers.todos) Object.entries(data.todos).forEach(([date, items]) => {
+            if (date < start || date > end) return;
+            items.forEach(item => {
+                if (!projectId || item.projectId === projectId) add({
+                    kind: 'todo', id: item.id, projectId: item.projectId, title: item.text,
+                    startDate: date, endDate: date, done: item.done, time: item.time
+                });
+            });
+        });
+        if (layers.events) (data.events || []).forEach(event => add({
+            kind: 'event', id: event.id, title: event.title, startDate: event.startDate, endDate: event.endDate, done: false
+        }));
+        return entries.sort((left, right) => left.startDate.localeCompare(right.startDate) ||
+            left.kind.localeCompare(right.kind) || left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
     }
     function taskBranch(data, projectId, taskId) {
         const tasks = data.tasks[projectId] || [], index = tasks.findIndex(task => task.id === taskId);
@@ -435,11 +513,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             if (task.progress === 100) { completed++; return; }
             let date = options.date;
             if (options.when === 'finish') {
-                const finish = new Date(project.startDate + 'T12:00:00');
-                finish.setDate(finish.getDate() + task.startDay + Math.max(0, task.duration - 1));
-                requireValue(Number.isFinite(finish.getTime()), 'A task finish date is outside the supported calendar range.');
-                date = finish.getFullYear() + '-' + String(finish.getMonth() + 1).padStart(2, '0') + '-' + String(finish.getDate()).padStart(2, '0');
-                requireValue(validDate(date), 'A task finish date is outside the supported four-digit calendar range.');
+                date = taskCalendarDates(project, task).endDate;
             }
             const exists = (data.todos[date] || []).some(item => todoHasSource(item, projectId, task.id));
             if (exists) { duplicates++; return; }
@@ -482,7 +556,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         return normalizeData(input);
     }
     function hasContent(profile) {
-        return profile.name !== 'Default' || profile.data.projects.length > 0 || Object.values(profile.data.todos).some(list => list.length > 0);
+        return profile.name !== 'Default' || profile.data.projects.length > 0 || profile.data.events?.length > 0 ||
+            Object.values(profile.data.todos).some(list => list.length > 0);
     }
     function encodeContent(value) {
         const bytes = new TextEncoder().encode(JSON.stringify(value, null, 2));
@@ -663,9 +738,9 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         persist() {
             if (!this.ready || this.blocked) return;
             try {
-                if (this.state.profiles.some(profile => documentFor(profile).schemaVersion === 2 ||
-                    profile.baseValue?.schemaVersion === 2 || profile.conflict?.value?.schemaVersion === 2) ||
-                    this.state.recovery.some(entry => entry.document.schemaVersion === 2)) this.state.schemaVersion = 2;
+                for (const profile of this.state.profiles) this.state.schemaVersion = Math.max(this.state.schemaVersion,
+                    documentFor(profile).schemaVersion, profile.baseValue?.schemaVersion || 1, profile.conflict?.value?.schemaVersion || 1);
+                for (const entry of this.state.recovery) this.state.schemaVersion = Math.max(this.state.schemaVersion, entry.document.schemaVersion);
                 this.storage.setItem(this.key, JSON.stringify(this.state)); this.storageError = null;
             } catch (error) {
                 this.storageError = new Error('Browser storage could not save your changes. Export all profiles before closing this tab. ' + error.message);
@@ -1066,6 +1141,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                     this.saveRecovery(documentFor(profile), 'Before ' + (options.mode === 'merge' ? 'adding imported data' : 'replacing data from a backup'));
                     profile.data = next;
                 }
+                profile.formatVersion = Math.max(profile.formatVersion || 1, documents[0].schemaVersion, dataVersion(next));
                 this.state.activeProfileId = profile.id;
             }
             this.state.recovery.push(...backup.recovery);
@@ -1077,7 +1153,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         Store, GitHubClient, GitHubError, RememberedConnection, normalizeData, normalizeDocument, normalizeIndex, normalizeBackup, sanitizeRichText,
         escapeText, emptyData, documentFor, encodeContent, decodeContent, cacheKey, same, MAX_FILE_BYTES,
         taskBranch, setTaskProgress, recalculateProject, syncLinkedTodos, todoCompletionPlan, setTodoCompletion,
-        unlinkTaskTodos, todoHasSource, planGanttTodos, copyGanttTodos
+        unlinkTaskTodos, todoHasSource, planGanttTodos, copyGanttTodos,
+        calendarDate, calendarDaysBetween, taskCalendarDates, calendarEntries, validDate
     };
 })();
 
@@ -1137,7 +1214,7 @@ function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
     if (typeof mobileSidebarOpen !== 'undefined' && mobileSidebarOpen) return true;
     if (onlineFileChoosing || onlineExporting) return true;
-    if (['task-modal', 'todo-edit-modal', 'gantt-todo-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
+    if (['task-modal', 'todo-edit-modal', 'calendar-event-modal', 'gantt-todo-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
@@ -1153,7 +1230,7 @@ function applyOnlineProfile(change) {
     const profile = onlineStore.current();
     data = profile.data;
     activeProjectId = profile.view.activeProjectId || 'overview';
-    if (!['overview', 'todo'].includes(activeProjectId) && !data.projects.some(project => project.id === activeProjectId)) activeProjectId = 'overview';
+    if (!['overview', 'todo', CALENDAR_VIEW_ID].includes(activeProjectId) && !data.projects.some(project => project.id === activeProjectId)) activeProjectId = 'overview';
     currentViewMode = profile.view.viewMode === 'summary' ? 'summary' : 'gantt';
     const zoom = profile.view.zoom;
     zoomLevel = ['day', 'week', 'month'].includes(zoom) ? zoom : 'day';
@@ -1165,8 +1242,9 @@ function applyOnlineProfile(change) {
     lastTaskPanelWidth = profile.view.lastTaskPanelWidth || 520;
     if (change.reason !== 'remote') {
         closeGanttTodoDialog(false);
-        closeModal();
-        closeTodoEditModal();
+        closeModal(false);
+        closeTodoEditModal(false);
+        closeCalendarEvent(false);
         dismissAllReminders();
         todoDate = profile.view.todoDate || null;
         todoLastProj = profile.view.todoLastProj || '';
@@ -1317,7 +1395,7 @@ function renameOnlineProfile() {
 function onlineProfileSummary(profile) {
     const tasks = Object.values(profile.data.tasks).reduce((total, list) => total + list.length, 0);
     const todos = Object.values(profile.data.todos).reduce((total, list) => total + list.length, 0);
-    return profile.data.projects.length + ' projects, ' + tasks + ' tasks, ' + todos + ' To Dos';
+    return profile.data.projects.length + ' projects, ' + tasks + ' tasks, ' + todos + ' To Dos, ' + (profile.data.events || []).length + ' events';
 }
 
 function openOnlineProfileManager() {
@@ -1889,6 +1967,408 @@ async function startOnlineTracker() {
 }
 
 </script>
+    <script data-bundled="online-calendar.js">
+'use strict';
+
+const CALENDAR_VIEW_ID = '@calendar';
+let calendarEventRef = null;
+
+function calendarOptions() {
+    const saved = readOnlineView('calendar', {});
+    return {
+        date: TrackerOnline.validDate(saved.date) ? saved.date : todoTodayStr(),
+        mode: saved.mode === 'week' ? 'week' : 'month',
+        layers: { todos: saved.layers?.todos !== false, projects: saved.layers?.projects !== false, events: saved.layers?.events !== false },
+        projectId: data.projects.some(project => project.id === saved.projectId) ? saved.projectId : '',
+        taskScope: ['all', 'main', 'leaf'].includes(saved.taskScope) ? saved.taskScope : 'all',
+        showCompleted: saved.showCompleted !== false,
+        filtersOpen: saved.filtersOpen === true
+    };
+}
+
+function changeCalendarOptions(changes, redraw = true) {
+    const options = { ...calendarOptions(), ...changes };
+    try { onlineStore.setView('calendar', options); }
+    catch (error) { showOnlineError(error); return false; }
+    if (redraw) renderCalendarView();
+    return true;
+}
+
+function openCalendar() {
+    setMobileSidebar(false, false);
+    activeProjectId = CALENDAR_VIEW_ID;
+    updateDataAndRender();
+}
+
+function calendarISO(date) {
+    return String(date.getFullYear()).padStart(4, '0') + '-' +
+        String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+
+function calendarRange(options) {
+    const selected = new Date(options.date + 'T12:00:00');
+    const first = new Date(selected);
+    if (options.mode === 'month') first.setDate(1);
+    const offset = (first.getDay() + 6) % 7;
+    const weeks = options.mode === 'week' ? 1 :
+        Math.ceil((offset + new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()) / 7);
+    first.setDate(first.getDate() - offset);
+    const rows = Array.from({ length: weeks }, (_, week) => Array.from({ length: 7 }, (_, day) => {
+        const date = new Date(first);
+        date.setDate(date.getDate() + week * 7 + day);
+        return date.getFullYear() < 100 || date.getFullYear() > 9999 ? null : calendarISO(date);
+    }));
+    const dates = rows.flat().filter(Boolean);
+    return { rows, start: dates[0], end: dates[dates.length - 1] };
+}
+
+function navigateCalendar(direction) {
+    try {
+        const options = calendarOptions();
+        let date;
+        if (options.mode === 'week') date = TrackerOnline.calendarDate(options.date, direction * 7);
+        else {
+            const current = new Date(options.date + 'T12:00:00'), day = current.getDate();
+            current.setDate(1); current.setMonth(current.getMonth() + direction);
+            current.setDate(Math.min(day, new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate()));
+            date = TrackerOnline.calendarDate(calendarISO(current));
+        }
+        changeCalendarOptions({ date });
+    } catch (error) { showOnlineError(error); }
+}
+
+function selectCalendarDate(date, reveal = false) {
+    if (!TrackerOnline.validDate(date)) { showOnlineError(new Error('Choose a valid calendar date.')); return; }
+    if (!changeCalendarOptions({ date })) return;
+    if (reveal && mobileLayout) document.getElementById('calendar-day').scrollIntoView({ block: 'nearest' });
+}
+
+function toggleCalendarLayer(layer) {
+    const options = calendarOptions();
+    changeCalendarOptions({ layers: { ...options.layers, [layer]: !options.layers[layer] } });
+}
+
+function calendarEntryKey(entry) {
+    return entry.kind + ':' + (entry.projectId || '') + ':' + entry.id;
+}
+
+function calendarEntryColor(entry) {
+    return entry.kind === 'event' ? '#c084fc' : entry.projectId ? todoProjColor(entry.projectId) : '#60a5fa';
+}
+
+function calendarEntryLabel(entry) {
+    const project = data.projects.find(item => item.id === entry.projectId);
+    const kind = entry.kind === 'task' ? (entry.milestone ? 'Milestone' : 'Gantt task') : entry.kind === 'todo' ? 'To Do' : 'Event';
+    const dates = entry.startDate === entry.endDate ? todoLongDate(entry.startDate) :
+        todoLongDate(entry.startDate) + ' to ' + todoLongDate(entry.endDate) + ' (inclusive)';
+    return kind + ': ' + entry.title + (project ? '\n' + project.name : '') + '\n' + dates +
+        (entry.kind === 'task' ? '\nProgress: ' + entry.progress + '%' : entry.time ? '\nReminder: ' + todoFmtTime(entry.time) : '');
+}
+
+function openCalendarEntry(kind, projectId, id, date) {
+    try {
+        if (kind === 'todo') editTodo(date, id);
+        else if (kind === 'event') openCalendarEvent(id);
+        else {
+            const index = (data.tasks[projectId] || []).findIndex(task => task.id === id);
+            if (index < 0) throw new Error('This Gantt task no longer exists.');
+            openModal(index, 'task', projectId);
+            enterEditMode();
+        }
+    } catch (error) { showOnlineError(error); }
+}
+
+function calendarEntryAction(entry) {
+    return "openCalendarEntry('" + entry.kind + "','" + (entry.projectId || '') + "','" + entry.id + "','" + entry.startDate + "')";
+}
+
+function calendarWeekLayout(entries, dates, limit) {
+    const valid = dates.filter(Boolean), first = valid[0], last = valid[valid.length - 1];
+    const segments = entries.filter(entry => entry.kind !== 'todo' && entry.startDate <= last && entry.endDate >= first).map(entry => ({
+        entry,
+        start: dates.findIndex(date => date && date >= entry.startDate),
+        end: dates.length - 1 - [...dates].reverse().findIndex(date => date && date <= entry.endDate)
+    })).sort((left, right) => left.start - right.start || (right.end - right.start) - (left.end - left.start) ||
+        calendarEntryKey(left.entry).localeCompare(calendarEntryKey(right.entry)));
+    const laneEnds = [], hidden = Array(7).fill(0);
+    for (const segment of segments) {
+        let lane = laneEnds.findIndex(end => end < segment.start);
+        if (lane < 0) lane = laneEnds.length;
+        laneEnds[lane] = segment.end; segment.lane = lane;
+        if (lane >= limit) for (let day = segment.start; day <= segment.end; day++) hidden[day]++;
+    }
+    return { segments: segments.filter(segment => segment.lane < limit), rows: Math.min(laneEnds.length, limit), hidden };
+}
+
+function calendarRenderBand(segment, weekKey, mini) {
+    const entry = segment.entry, color = calendarEntryColor(entry);
+    const style = 'grid-column:' + (segment.start + 1) + '/span ' + (segment.end - segment.start + 1) +
+        ';grid-row:' + (segment.lane + 1) + ';--calendar-color:' + color +
+        ';--calendar-progress:' + (entry.kind === 'task' ? entry.progress : 0) + '%';
+    if (mini) return '<span class="calendar-band-mini" style="' + style + '" aria-hidden="true"></span>';
+    return '<button type="button" class="calendar-band' + (entry.done ? ' calendar-complete' : '') +
+        '" style="' + style + '" data-calendar-key="' + calendarEntryKey(entry) +
+        '" data-calendar-focus="band:' + weekKey + ':' + calendarEntryKey(entry) +
+        '" title="' + todoEsc(calendarEntryLabel(entry)) + '" aria-label="' + todoEsc(calendarEntryLabel(entry) + '. Edit.') +
+        '" onclick="' + calendarEntryAction(entry) + '"><span class="calendar-band-title">' +
+        (entry.milestone ? '&#9670; ' : entry.kind === 'event' ? '&#9675; ' : '') + todoEsc(entry.title) + '</span></button>';
+}
+
+function calendarRenderTodo(entry, compact = false) {
+    const item = (data.todos[entry.startDate] || []).find(todo => todo.id === entry.id);
+    const project = data.projects.find(candidate => candidate.id === entry.projectId);
+    const hint = calendarEntryLabel(entry) + (item?.taskId ? '\n' + todoProjectHint(item) : '');
+    const key = calendarEntryKey(entry), prefix = compact ? 'grid:' : 'agenda:';
+    return '<div class="calendar-todo' + (entry.done ? ' calendar-complete' : '') + '" data-calendar-key="' + key + '">' +
+        '<label class="calendar-checkbox"><input type="checkbox"' + (entry.done ? ' checked' : '') +
+        ' aria-label="' + todoEsc((entry.done ? 'Reopen ' : 'Complete ') + entry.title) + '" data-calendar-focus="' + prefix + key + ':check"' +
+        ' onchange="calendarToggleTodo(\'' + entry.startDate + '\',\'' + entry.id + '\',this)"></label>' +
+        '<button type="button" class="calendar-item-text" data-calendar-focus="' + prefix + key + ':edit" title="' + todoEsc(hint) +
+        '" onclick="' + calendarEntryAction(entry) + '"><span>' + todoEsc(entry.title) + '</span>' +
+        (!compact ? '<small>To Do' + (project ? ' &middot; ' + todoEsc(project.name) : '') +
+            (entry.time ? ' &middot; ' + todoEsc(todoFmtTime(entry.time)) : '') + '</small>' : '') + '</button></div>';
+}
+
+function calendarToggleTodo(date, id, control) {
+    const focus = control.dataset.calendarFocus;
+    toggleTodo(date, id, control);
+    restoreCalendarFocus(focus);
+}
+
+function calendarRenderWeek(entries, dates, options) {
+    const weekKey = dates.find(Boolean), mini = mobileLayout && options.mode === 'month';
+    const layout = calendarWeekLayout(entries, dates, options.mode === 'week' ? 8 : 3);
+    const dailyLimit = options.mode === 'week' ? 6 : 2;
+    const dayCounts = dates.map(date => date ? entries.filter(entry => entry.startDate <= date && entry.endDate >= date).length : 0);
+    const headers = dates.map((date, index) => !date ? '<span></span>' :
+        '<button type="button" class="calendar-date' + (date === options.date ? ' calendar-selected' : '') +
+        (date === todoTodayStr() ? ' calendar-today' : '') + (date.slice(0, 7) !== options.date.slice(0, 7) ? ' calendar-outside' : '') +
+        (index > 4 ? ' calendar-weekend' : '') + '" data-calendar-date="' + date + '" data-calendar-focus="day:' + date +
+        '" aria-pressed="' + (date === options.date) + '" aria-label="' + todoEsc(todoLongDate(date) + ', ' + dayCounts[index] +
+            ' items. Show day details and add items.') + '" onclick="selectCalendarDate(\'' + date + '\',true)"><span>' +
+        Number(date.slice(-2)) + '</span>' + (mini && dayCounts[index] ? '<small aria-hidden="true">' + dayCounts[index] + '</small>' : '') + '</button>').join('');
+    const daily = mini ? '' : '<div class="calendar-daily-grid">' + dates.map((date, index) => {
+        if (!date) return '<div></div>';
+        const todos = entries.filter(entry => entry.kind === 'todo' && entry.startDate === date);
+        const more = layout.hidden[index] + Math.max(0, todos.length - dailyLimit);
+        return '<div class="calendar-daily-items">' + todos.slice(0, dailyLimit).map(entry => calendarRenderTodo(entry, true)).join('') +
+            (more ? '<button type="button" class="calendar-overflow" data-calendar-focus="more:' + date +
+                '" onclick="selectCalendarDate(\'' + date + '\',true)">+' + more + ' more</button>' : '') + '</div>';
+    }).join('') + '</div>';
+    return '<section class="calendar-week" data-calendar-week="' + weekKey + '"><div class="calendar-date-grid">' + headers +
+        '</div><div class="calendar-bands' + (mini ? ' calendar-mini-bands' : '') + '" style="grid-template-rows:repeat(' + layout.rows +
+        ',var(--calendar-band-height))">' + layout.segments.map(segment => calendarRenderBand(segment, weekKey, mini)).join('') + '</div>' + daily + '</section>';
+}
+
+function renderCalendarView() {
+    if (activeProjectId !== CALENDAR_VIEW_ID) return;
+    const options = calendarOptions(), focused = document.activeElement?.dataset.calendarFocus;
+    document.getElementById('calendar-month').setAttribute('aria-pressed', String(options.mode === 'month'));
+    document.getElementById('calendar-week').setAttribute('aria-pressed', String(options.mode === 'week'));
+    for (const layer of ['todos', 'projects', 'events']) document.getElementById('calendar-layer-' + layer).setAttribute('aria-pressed', String(options.layers[layer]));
+    const projectSelect = document.getElementById('calendar-project');
+    const projects = '<option value="">All projects + unassigned</option>' +
+        data.projects.map(project => '<option value="' + project.id + '">' + todoEsc(project.name) + '</option>').join('');
+    if (projectSelect.innerHTML !== projects) projectSelect.innerHTML = projects;
+    projectSelect.value = options.projectId;
+    document.getElementById('calendar-task-scope').value = options.taskScope;
+    document.getElementById('calendar-completed').checked = options.showCompleted;
+    document.getElementById('calendar-jump').value = options.date;
+    document.getElementById('calendar-filters').classList.toggle('hidden', !options.filtersOpen);
+    document.getElementById('calendar-filter-toggle').setAttribute('aria-expanded', String(options.filtersOpen));
+    const shell = document.getElementById('calendar-grid-scroll');
+    shell.classList.toggle('calendar-week-mode', options.mode === 'week');
+    shell.classList.toggle('calendar-month-mode', options.mode === 'month');
+    try {
+        const range = calendarRange(options);
+        const entries = TrackerOnline.calendarEntries(data, range.start, range.end, options);
+        const selected = new Date(options.date + 'T12:00:00');
+        const label = options.mode === 'month' ? selected.toLocaleDateString('en-US', { month: mobileLayout ? 'short' : 'long', year: 'numeric' }) :
+            new Date(range.start + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' - ' +
+            new Date(range.end + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        document.getElementById('calendar-period').textContent = label;
+        document.getElementById('calendar-period').title = label;
+        document.getElementById('calendar-grid').innerHTML = '<div class="calendar-weekdays">' +
+            ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => '<span>' + day + '</span>').join('') +
+            '</div>' + range.rows.map(dates => calendarRenderWeek(entries, dates, options)).join('');
+        document.getElementById('calendar-hint').textContent = mobileLayout && options.mode === 'week' ?
+            'Swipe the week sideways. Tap a date for its full agenda or to add an item.' :
+            mobileLayout ? 'Tap a date for its full agenda or to add an item. Colored strips show project/event spans.' :
+                'Select a date to add a To Do or event. Click a band or item to edit its source.';
+        const dayEntries = entries.filter(entry => entry.startDate <= options.date && entry.endDate >= options.date);
+        document.getElementById('calendar-day-title').textContent = todoLongDate(options.date);
+        document.getElementById('calendar-day-count').textContent = dayEntries.length + ' visible item' + (dayEntries.length === 1 ? '' : 's');
+        document.getElementById('calendar-agenda').innerHTML = dayEntries.length ? dayEntries.map(entry => {
+            if (entry.kind === 'todo') return calendarRenderTodo(entry);
+            const project = data.projects.find(item => item.id === entry.projectId);
+            const meta = entry.kind === 'event' ? 'Event &middot; ' + todoEsc(entry.startDate === entry.endDate ? 'All day' :
+                todoLongDate(entry.startDate) + ' - ' + todoLongDate(entry.endDate)) :
+                (entry.milestone ? 'Milestone' : 'Gantt task') + ' &middot; ' + todoEsc(project.name) + ' &middot; ' + entry.progress + '%';
+            return '<button type="button" class="calendar-agenda-item' + (entry.done ? ' calendar-complete' : '') +
+                '" style="--calendar-color:' + calendarEntryColor(entry) + '" data-calendar-key="' + calendarEntryKey(entry) +
+                '" data-calendar-focus="agenda:' + calendarEntryKey(entry) + ':edit" title="' + todoEsc(calendarEntryLabel(entry)) +
+                '" onclick="' + calendarEntryAction(entry) + '"><span>' + (entry.milestone ? '&#9670; ' : '') + todoEsc(entry.title) +
+                '</span><small>' + meta + '</small></button>';
+        }).join('') : '<p class="calendar-empty">No items for this date and these filters.</p>';
+        if (focused) restoreCalendarFocus(focused);
+    } catch (error) {
+        showOnlineError(error);
+        document.getElementById('calendar-grid').innerHTML = '<p class="calendar-empty" role="alert">' + todoEsc(error.message) + '</p>';
+        document.getElementById('calendar-agenda').replaceChildren();
+    }
+}
+
+function restoreCalendarFocus(key) {
+    const target = key && document.querySelector('[data-calendar-focus="' + key + '"]');
+    if (target?.getClientRects().length) target.focus({ preventScroll: true });
+    else if (activeProjectId === CALENDAR_VIEW_ID) document.getElementById('calendar-add-todo').focus({ preventScroll: true });
+}
+
+function revealCalendarAdd() {
+    document.getElementById('calendar-day').scrollIntoView({ block: 'nearest' });
+    document.getElementById('calendar-add-todo').focus({ preventScroll: true });
+}
+
+function addCalendarTodo() {
+    const options = calendarOptions();
+    editTodo(options.date, null, options.projectId);
+}
+
+function openCalendarEvent(id = null) {
+    const event = id ? data.events.find(item => item.id === id) : null;
+    if (id && !event) { showOnlineError(new Error('This calendar event no longer exists.')); return; }
+    const date = calendarOptions().date;
+    calendarEventRef = { id, profileId: onlineStore.current().id, focus: document.activeElement?.dataset.calendarFocus };
+    document.getElementById('calendar-event-heading').textContent = event ? 'Edit event' : 'Add event';
+    document.getElementById('calendar-event-title').value = event?.title || '';
+    document.getElementById('calendar-event-start').value = event?.startDate || date;
+    document.getElementById('calendar-event-end').value = event?.endDate || date;
+    document.getElementById('calendar-event-notes').innerHTML = TrackerOnline.sanitizeRichText(event?.description || '');
+    document.getElementById('calendar-event-error').classList.add('hidden');
+    document.getElementById('calendar-event-delete').classList.toggle('hidden', !event);
+    document.getElementById('calendar-event-modal').classList.remove('hidden');
+    document.getElementById('calendar-event-title').focus();
+}
+
+function closeCalendarEvent(restoreFocus = true) {
+    const focus = calendarEventRef?.focus;
+    document.getElementById('calendar-event-modal').classList.add('hidden');
+    calendarEventRef = null;
+    if (restoreFocus) restoreCalendarFocus(focus);
+}
+
+function saveCalendarEvent() {
+    const errorBox = document.getElementById('calendar-event-error');
+    errorBox.classList.add('hidden');
+    try {
+        onlineStore.requireEditable();
+        if (!calendarEventRef || calendarEventRef.profileId !== onlineStore.current().id) throw new Error('Reopen the event in its original profile.');
+        const event = { id: calendarEventRef.id || 'event-' + generateId(), title: document.getElementById('calendar-event-title').value,
+            startDate: document.getElementById('calendar-event-start').value, endDate: document.getElementById('calendar-event-end').value,
+            description: document.getElementById('calendar-event-notes').innerHTML };
+        const next = JSON.parse(JSON.stringify(data));
+        if (calendarEventRef.id) {
+            const index = next.events.findIndex(item => item.id === calendarEventRef.id);
+            if (index < 0) throw new Error('This calendar event no longer exists.');
+            next.events[index] = event;
+        } else next.events.push(event);
+        data = TrackerOnline.normalizeData(next);
+        calendarEventRef.id = event.id;
+        if (!persistOnlineData()) return;
+        const selected = calendarOptions().date;
+        if (selected < event.startDate || selected > event.endDate) changeCalendarOptions({ date: event.startDate }, false);
+        syncToFile(); render(); closeCalendarEvent();
+        todoNotice('Calendar event saved.');
+    } catch (error) {
+        console.error('Calendar event:', error.message);
+        errorBox.textContent = error.message; errorBox.classList.remove('hidden');
+    }
+}
+
+function deleteCalendarEvent() {
+    if (!calendarEventRef?.id || !confirm('Permanently delete this calendar event? Project tasks and To Dos will not be changed.')) return;
+    const errorBox = document.getElementById('calendar-event-error');
+    try {
+        onlineStore.requireEditable();
+        if (calendarEventRef.profileId !== onlineStore.current().id) throw new Error('Reopen the event in its original profile.');
+        const next = JSON.parse(JSON.stringify(data)), index = next.events.findIndex(event => event.id === calendarEventRef.id);
+        if (index < 0) throw new Error('This calendar event no longer exists.');
+        next.events.splice(index, 1); data = TrackerOnline.normalizeData(next);
+        if (!persistOnlineData()) return;
+        syncToFile(); render(); closeCalendarEvent(); todoNotice('Calendar event deleted.');
+    } catch (error) {
+        console.error('Calendar event:', error.message);
+        errorBox.textContent = error.message; errorBox.classList.remove('hidden');
+    }
+}
+
+function prepareCalendarTaskEditor() {
+    const task = data.tasks[currentModalProjectId].find(item => item.id === currentModalTaskId);
+    const project = data.projects.find(item => item.id === currentModalProjectId);
+    const parent = TrackerOnline.taskBranch(data, project.id, task.id).descendants.length > 0;
+    document.getElementById('calendar-task-name').value = task.name;
+    document.getElementById('calendar-task-start').value = TrackerOnline.taskCalendarDates(project, task).startDate;
+    document.getElementById('calendar-task-start').min = project.startDate;
+    document.getElementById('calendar-task-start').disabled = parent;
+    document.getElementById('calendar-task-duration').value = task.duration;
+    document.getElementById('calendar-task-duration').disabled = parent || task.isMilestone;
+    document.getElementById('calendar-task-milestone').checked = task.isMilestone;
+    document.getElementById('calendar-task-milestone').disabled = parent;
+    document.getElementById('calendar-task-progress').value = parent && !task.isManualProgress ? '' : task.progress;
+    document.getElementById('calendar-task-progress').placeholder = parent ? 'Automatic (' + task.progress + '%)' : '0';
+    document.getElementById('calendar-task-info').textContent = parent ?
+        'Parent dates follow subtasks. A progress value overrides only this parent; leave blank for automatic progress.' :
+        'Edits change the Gantt task itself. Linked To Do completion follows progress; copied text, notes and dates stay independent.';
+}
+
+function toggleCalendarTaskMilestone(checked) {
+    const duration = document.getElementById('calendar-task-duration');
+    duration.disabled = checked;
+    if (checked) duration.value = 0;
+    else if (Number(duration.value) === 0) duration.value = 1;
+}
+
+function saveCalendarTask() {
+    const errorBox = document.getElementById('modal-save-error');
+    errorBox.classList.add('hidden');
+    try {
+        onlineStore.requireEditable();
+        const next = JSON.parse(JSON.stringify(data));
+        const project = next.projects.find(item => item.id === currentModalProjectId);
+        if (!project) throw new Error('This project no longer exists.');
+        const branch = TrackerOnline.taskBranch(next, project.id, currentModalTaskId), task = branch.task;
+        const name = document.getElementById('calendar-task-name').value.trim();
+        if (!name) throw new Error('Enter a task name.');
+        task.name = name;
+        if (!branch.descendants.length) {
+            const start = document.getElementById('calendar-task-start').value;
+            if (!TrackerOnline.validDate(start) || start < project.startDate) throw new Error('Choose a task start on or after the project start date.');
+            const rawDuration = document.getElementById('calendar-task-duration').value;
+            const duration = Number(rawDuration), milestone = document.getElementById('calendar-task-milestone').checked;
+            if (!milestone && (!rawDuration.trim() || !Number.isSafeInteger(duration) || duration < 0)) throw new Error('Enter a whole number of calendar days, or choose Milestone.');
+            task.startDay = TrackerOnline.calendarDaysBetween(project.startDate, start);
+            task.duration = milestone ? 0 : duration; task.isMilestone = milestone;
+            TrackerOnline.taskCalendarDates(project, task);
+        }
+        const progressText = document.getElementById('calendar-task-progress').value.trim();
+        if (progressText === '') { task.isManualProgress = false; if (!branch.descendants.length) TrackerOnline.setTaskProgress(task, 0, false); }
+        else {
+            const progress = Number(progressText);
+            if (progress !== task.progress || (branch.descendants.length && !task.isManualProgress)) TrackerOnline.setTaskProgress(task, progress);
+        }
+        task.description = TrackerOnline.sanitizeRichText(document.getElementById('modal-editor').innerHTML);
+        const parents = TrackerOnline.recalculateProject(next, project.id);
+        TrackerOnline.syncLinkedTodos(next);
+        data = TrackerOnline.normalizeData(next);
+        if (!persistOnlineData()) return;
+        syncToFile(); render(); closeModal(); notifyLinkedProgress(parents);
+    } catch (error) {
+        console.error('Calendar task edit:', error.message);
+        errorBox.textContent = error.message; errorBox.classList.remove('hidden');
+    }
+}
+
+</script>
     <style>
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1f2937; }
@@ -2042,6 +2522,105 @@ async function startOnlineTracker() {
         .todo-new-link-row { flex-basis: 100%; min-width: 0; }
         .todo-new-link-row.hidden { display: none; }
         #todo-edit-notes { min-height: 100px; max-height: 180px; overflow-y: auto; }
+        #calendar-view { padding: 20px; min-width: 0; }
+        .calendar-top, .calendar-navigation, .calendar-layers { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .calendar-top h2 { flex: 1; min-width: 0; font-size: 26px; font-weight: 800; }
+        .calendar-button, .calendar-mode button, .calendar-layer {
+            min-height: 36px; padding: 6px 12px; border: 1px solid #4b5563; border-radius: 6px;
+            background: #1f2937; color: #d1d5db; font-size: 13px; font-weight: 600;
+        }
+        .calendar-button:hover, .calendar-mode button:hover, .calendar-layer:hover { background: #374151; color: white; }
+        .calendar-mode { display: flex; gap: 2px; }
+        .calendar-mode button[aria-pressed="true"], .calendar-layer[aria-pressed="true"] { background: #1e3a5f; border-color: #60a5fa; color: #dbeafe; }
+        .calendar-primary { background: #2563eb; border-color: #3b82f6; color: white; }
+        .calendar-danger { color: #fca5a5; }
+        #calendar-period { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .calendar-layers { gap: 6px; }
+        .calendar-layer { flex: 1; }
+        .calendar-filters, .calendar-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .calendar-filters { padding: 12px; margin-bottom: 12px; border: 1px solid #374151; border-radius: 8px; background: #111827; }
+        .calendar-filters.hidden, .calendar-form-grid.hidden { display: none; }
+        .calendar-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; font-weight: 600; color: #d1d5db; }
+        .calendar-field input, .calendar-field select {
+            width: 100%; min-width: 0; min-height: 36px; padding: 7px; border: 1px solid #4b5563;
+            border-radius: 5px; background: #111827; color: white; font-size: 14px; font-weight: 400;
+        }
+        .calendar-field input:disabled { opacity: 0.6; }
+        .calendar-wide { grid-column: 1 / -1; }
+        .calendar-check-field { display: flex; align-items: center; gap: 8px; min-height: 36px; color: #d1d5db; font-size: 13px; }
+        .calendar-check-field input { width: 17px; height: 17px; accent-color: #3b82f6; }
+        #calendar-hint { margin: 0 0 12px; color: #9ca3af; font-size: 12px; }
+        .calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+        #calendar-grid-scroll { min-width: 0; max-width: 100%; overflow-x: auto; border: 1px solid #374151; border-radius: 8px; background: #111827; }
+        #calendar-grid { min-width: 560px; --calendar-band-height: 26px; }
+        .calendar-weekdays, .calendar-date-grid, .calendar-bands, .calendar-daily-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+        .calendar-weekdays { padding: 10px 0; color: #9ca3af; text-align: center; font-size: 12px; font-weight: 600; border-bottom: 1px solid #374151; }
+        .calendar-week { border-bottom: 1px solid #374151; background-image: linear-gradient(to right, #374151 1px, transparent 1px); background-size: calc(100% / 7) 100%; }
+        .calendar-week:last-child { border-bottom: 0; }
+        .calendar-date { min-width: 0; min-height: 36px; padding: 6px; text-align: left; color: #e5e7eb; font-size: 13px; font-weight: 600; }
+        .calendar-date:hover { background: #374151; }
+        .calendar-outside { color: #6b7280; }
+        .calendar-weekend { background-color: #1f293755; }
+        .calendar-today > span { border-bottom: 2px solid #60a5fa; }
+        .calendar-selected { background: #1e3a5f; color: white; box-shadow: inset 0 0 0 1px #60a5fa; }
+        .calendar-bands { gap: 3px 0; padding: 2px 0; }
+        .calendar-band {
+            min-width: 0; min-height: 26px; margin: 0 3px; padding: 3px 5px; border-left: 3px solid var(--calendar-color);
+            border-radius: 4px; background: linear-gradient(to right, #ffffff15 var(--calendar-progress), #ffffff04 var(--calendar-progress)), #1f2937;
+            color: #f3f4f6; text-align: left; overflow: clip; white-space: nowrap; font-size: 11px;
+            box-shadow: inset 0 0 0 1px #ffffff18;
+        }
+        .calendar-band-title { position: sticky; left: 6px; display: inline-block; max-width: min(100%, calc(100vw - 40px)); overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+        .calendar-band:hover { background-color: #374151; }
+        .calendar-band-mini { height: 4px; margin: 0 1px; border-radius: 2px; background: var(--calendar-color); }
+        .calendar-daily-items { min-width: 0; min-height: 44px; padding: 2px; }
+        .calendar-todo { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: 5px; }
+        .calendar-checkbox { display: flex; align-items: center; justify-content: center; width: 26px; min-height: 28px; flex-shrink: 0; }
+        .calendar-checkbox input { width: 16px; height: 16px; accent-color: #3b82f6; }
+        .calendar-item-text { flex: 1; min-width: 0; padding: 4px 2px; text-align: left; color: #e5e7eb; font-size: 12px; }
+        .calendar-item-text > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .calendar-complete { opacity: 0.65; }
+        .calendar-complete .calendar-item-text > span { text-decoration: line-through; }
+        .calendar-overflow { min-height: 26px; max-width: 100%; padding: 3px; color: #93c5fd; font-size: 11px; }
+        #calendar-day { min-width: 0; padding: 14px; border: 1px solid #374151; border-radius: 8px; background: #111827; }
+        #calendar-day-title { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+        #calendar-day-count { display: block; margin: 4px 0 12px; color: #9ca3af; font-size: 12px; }
+        .calendar-day-actions { display: flex; gap: 6px; margin-bottom: 14px; }
+        .calendar-day-actions button { flex: 1; }
+        .calendar-agenda-item { display: block; width: 100%; padding: 10px; text-align: left; border-left: 3px solid var(--calendar-color); border-radius: 5px; background: #1f2937; }
+        .calendar-agenda-item > span { display: block; color: #f3f4f6; overflow-wrap: anywhere; }
+        #calendar-agenda > * + * { margin-top: 8px; }
+        #calendar-agenda .calendar-todo { padding: 3px; background: #1f2937; }
+        #calendar-agenda .calendar-item-text { padding: 7px 4px; font-size: 14px; }
+        #calendar-agenda .calendar-item-text > span { white-space: normal; overflow-wrap: anywhere; }
+        #calendar-agenda small { display: block; margin-top: 4px; color: #9ca3af; font-size: 11px; overflow-wrap: anywhere; }
+        .calendar-empty { padding: 12px 0; color: #9ca3af; font-size: 13px; }
+        #calendar-event-modal { z-index: 108; }
+        #calendar-event-notes { min-height: 84px; max-height: 160px; overflow-y: auto; }
+        #task-modal > div { max-height: calc(100dvh - 32px); overflow-y: auto; }
+        .mobile-layout #task-modal > div { max-height: 100%; }
+        @media (max-width: 1300px) { .calendar-layout { grid-template-columns: minmax(0, 1fr); } }
+        .mobile-layout #calendar-view { padding: 12px 4px 28px; scrollbar-width: none; }
+        .mobile-layout #calendar-view::-webkit-scrollbar { display: none; }
+        .mobile-layout .calendar-top, .mobile-layout .calendar-navigation, .mobile-layout .calendar-layers { margin-left: 6px; margin-right: 6px; gap: 5px; margin-bottom: 8px; }
+        .mobile-layout .calendar-top h2 { font-size: 22px; }
+        .mobile-layout .calendar-button, .mobile-layout .calendar-mode button, .mobile-layout .calendar-layer { min-width: 44px; min-height: 44px; padding: 7px 9px; }
+        .mobile-layout #calendar-period { font-size: 14px; }
+        .mobile-layout .calendar-filters { margin: 0 6px 10px; gap: 10px; }
+        .mobile-layout .calendar-field input, .mobile-layout .calendar-field select { min-height: 44px; font-size: 16px; }
+        .mobile-layout #calendar-hint { padding: 0 6px; }
+        .mobile-layout #calendar-grid { min-width: 0; --calendar-band-height: 4px; }
+        .mobile-layout .calendar-week-mode #calendar-grid { min-width: 700px; --calendar-band-height: 44px; }
+        .mobile-layout .calendar-date { min-height: 64px; padding: 6px 4px; }
+        .mobile-layout .calendar-date small { display: table; min-width: 18px; margin-top: 6px; padding: 1px 4px; border-radius: 4px; background: #374151; color: #d1d5db; font-size: 10px; line-height: 14px; text-align: center; }
+        .mobile-layout .calendar-week-mode .calendar-date { min-height: 44px; }
+        .mobile-layout .calendar-mini-bands { gap: 2px 0; padding-bottom: 4px; }
+        .mobile-layout .calendar-band, .mobile-layout .calendar-overflow, .mobile-layout .calendar-item-text { min-height: 44px; }
+        .mobile-layout .calendar-band { font-size: 12px; padding: 7px; }
+        .mobile-layout .calendar-checkbox { width: 44px; min-height: 44px; }
+        .mobile-layout .calendar-checkbox input { width: 18px; height: 18px; }
+        .mobile-layout #calendar-day { margin: 0 6px; padding: 12px; }
+        .mobile-layout #calendar-day .calendar-button { padding: 8px; }
         .mobile-toolbar-content { display: flex; flex-direction: column; gap: 12px; }
         .mobile-toolbar-content.hidden { display: none; }
         .task-bar, .milestone, .resize-handle { touch-action: none; }
@@ -2302,7 +2881,7 @@ async function startOnlineTracker() {
             <input type="file" id="file-import" accept=".json" class="hidden" onchange="handleImport(event)">
         </div>
         <div id="mobile-toolbar-main" class="mobile-only">
-            <button id="mobile-sidebar-toggle" type="button" onclick="setMobileSidebar(true)" class="toolbar-icon bg-gray-700 rounded" aria-label="Open profiles, projects and To Do" aria-controls="sidebar" aria-expanded="false">
+            <button id="mobile-sidebar-toggle" type="button" onclick="setMobileSidebar(true)" class="toolbar-icon bg-gray-700 rounded" aria-label="Open profiles, Calendar, To Do and projects" aria-controls="sidebar" aria-expanded="false">
                 <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
             </button>
             <button id="mobile-current-title" type="button" onclick="openMobileActions('project',activeProjectId)" disabled>Overview</button>
@@ -2329,6 +2908,10 @@ async function startOnlineTracker() {
                 </button>
             </div>
             
+            <button type="button" id="btn-calendar" onclick="openCalendar()" class="p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0 text-left">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>
+                Calendar
+            </button>
             <div id="btn-todo" onclick="openTodo()" class="p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0">
                 <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
                 To Do
@@ -2357,6 +2940,58 @@ async function startOnlineTracker() {
             <div class="max-w-6xl mx-auto">
                 <h2 class="text-3xl font-extrabold text-white mb-8">Projects Overview</h2>
                 <div id="overview-content" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 pb-20"></div>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto bg-gray-900 hidden" id="calendar-view">
+            <div class="calendar-top">
+                <h2>Calendar</h2>
+                <div class="calendar-mode" role="group" aria-label="Calendar view">
+                    <button type="button" id="calendar-month" onclick="changeCalendarOptions({mode:'month'})" aria-pressed="true">Month</button>
+                    <button type="button" id="calendar-week" onclick="changeCalendarOptions({mode:'week'})" aria-pressed="false">Week</button>
+                </div>
+                <button type="button" class="calendar-button calendar-primary" onclick="revealCalendarAdd()" aria-label="Add an item to the selected date">+ Add</button>
+            </div>
+            <div class="calendar-navigation">
+                <button type="button" id="calendar-prev" class="calendar-button" onclick="navigateCalendar(-1)" aria-label="Previous calendar period">&lsaquo;</button>
+                <h3 id="calendar-period" aria-live="polite"></h3>
+                <button type="button" id="calendar-next" class="calendar-button" onclick="navigateCalendar(1)" aria-label="Next calendar period">&rsaquo;</button>
+                <button type="button" id="calendar-today" class="calendar-button" onclick="selectCalendarDate(todoTodayStr())">Today</button>
+                <button type="button" id="calendar-filter-toggle" class="calendar-button" onclick="changeCalendarOptions({filtersOpen:!calendarOptions().filtersOpen})" aria-label="Calendar filters and date jump" aria-expanded="false" aria-controls="calendar-filters">
+                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="#1f2937"/><circle cx="16" cy="12" r="2" fill="#1f2937"/><circle cx="10" cy="18" r="2" fill="#1f2937"/></svg>
+                </button>
+            </div>
+            <div class="calendar-layers" role="group" aria-label="Calendar layers">
+                <button type="button" id="calendar-layer-todos" class="calendar-layer" onclick="toggleCalendarLayer('todos')" aria-pressed="true">To Dos</button>
+                <button type="button" id="calendar-layer-projects" class="calendar-layer" onclick="toggleCalendarLayer('projects')" aria-pressed="true">Projects</button>
+                <button type="button" id="calendar-layer-events" class="calendar-layer" onclick="toggleCalendarLayer('events')" aria-pressed="true">Events</button>
+            </div>
+            <div id="calendar-filters" class="calendar-filters hidden">
+                <label class="calendar-field">Project / tagged To Dos
+                    <select id="calendar-project" onchange="changeCalendarOptions({projectId:this.value})"></select>
+                </label>
+                <label class="calendar-field">Gantt task levels
+                    <select id="calendar-task-scope" onchange="changeCalendarOptions({taskScope:this.value})">
+                        <option value="all">All tasks</option><option value="main">Main tasks only</option><option value="leaf">Actionable tasks only</option>
+                    </select>
+                </label>
+                <label class="calendar-field">Go to date
+                    <input type="date" id="calendar-jump" onchange="selectCalendarDate(this.value)">
+                </label>
+                <label class="calendar-check-field"><input type="checkbox" id="calendar-completed" onchange="changeCalendarOptions({showCompleted:this.checked})" checked>Show completed work</label>
+                <p class="calendar-wide text-xs text-gray-400">Events are independent of project filters. These display preferences stay in this browser.</p>
+            </div>
+            <p id="calendar-hint"></p>
+            <div class="calendar-layout">
+                <div id="calendar-grid-scroll" role="region" aria-label="Calendar dates and schedule" tabindex="0"><div id="calendar-grid"></div></div>
+                <section id="calendar-day" aria-labelledby="calendar-day-title">
+                    <h3 id="calendar-day-title"></h3>
+                    <span id="calendar-day-count" role="status"></span>
+                    <div class="calendar-day-actions">
+                        <button type="button" id="calendar-add-todo" data-calendar-focus="add-todo" class="calendar-button" onclick="addCalendarTodo()">+ To Do</button>
+                        <button type="button" id="calendar-add-event" data-calendar-focus="add-event" class="calendar-button" onclick="openCalendarEvent()">+ Event</button>
+                    </div>
+                    <div id="calendar-agenda"></div>
+                </section>
             </div>
         </div>
         <!-- View 3: Daily Todo -->
@@ -2434,21 +3069,29 @@ async function startOnlineTracker() {
     </div>
     <!-- Details Modal -->
     <div id="task-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-        <div class="bg-gray-800 rounded-lg shadow-xl w-[550px] max-w-[90%] flex flex-col border border-gray-600">
+        <div class="bg-gray-800 rounded-lg shadow-xl w-[550px] max-w-[90%] flex flex-col border border-gray-600" role="dialog" aria-modal="true" aria-labelledby="modal-title">
             <div class="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800 rounded-t-lg">
                 <h3 id="modal-title" class="font-bold text-lg text-white truncate pr-4">Details</h3>
-                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-xl leading-none" aria-label="Close task details">&times;</button>
             </div>
             <div id="modal-view" class="p-4 flex flex-col">
                 <div id="modal-desc-text" class="text-gray-300 min-h-[100px] text-sm leading-relaxed rich-text overflow-y-auto max-h-[300px] pr-2"></div>
                 <div class="mt-6 flex justify-end gap-2">
-                    <button id="project-copy-todos" type="button" onclick="openGanttTodoDialog(activeProjectId)" class="hidden px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm font-medium">Copy to To Do</button>
+                    <button id="project-copy-todos" type="button" onclick="openGanttTodoDialog(currentModalProjectId)" class="hidden px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm font-medium">Copy to To Do</button>
                     <button onclick="enterEditMode()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-medium flex items-center gap-1.5">
                         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg> Edit Details
                     </button>
                 </div>
             </div>
             <div id="modal-edit" class="p-4 hidden flex flex-col">
+                <div id="modal-task-fields" class="calendar-form-grid hidden mb-4">
+                    <label class="calendar-field calendar-wide">Task name<input id="calendar-task-name" type="text"></label>
+                    <label class="calendar-field">Start date<input id="calendar-task-start" type="date"></label>
+                    <label class="calendar-field">Duration (calendar days)<input id="calendar-task-duration" type="number" min="0" step="1"></label>
+                    <label class="calendar-field">Progress % (blank = automatic)<input id="calendar-task-progress" type="number" min="0" max="100" step="1"></label>
+                    <label class="calendar-check-field"><input id="calendar-task-milestone" type="checkbox" onchange="toggleCalendarTaskMilestone(this.checked)">Milestone</label>
+                    <p id="calendar-task-info" class="calendar-wide text-xs text-gray-400"></p>
+                </div>
                 <div class="flex gap-2 mb-2 bg-gray-700 p-2 rounded-t border border-gray-600 border-b-0">
                     <button onclick="formatText('bold')" class="px-2.5 py-1 bg-gray-600 hover:bg-gray-500 rounded font-bold text-white shadow-sm" title="Bold">B</button>
                     <button onclick="formatText('italic')" class="px-2.5 py-1 bg-gray-600 hover:bg-gray-500 rounded italic text-white shadow-sm" title="Italic">I</button>
@@ -2459,6 +3102,7 @@ async function startOnlineTracker() {
                     </button>
                 </div>
                 <div id="modal-editor" contenteditable="true" data-placeholder="Add descriptions, notes, or lists here..." class="w-full h-48 bg-gray-900 border border-gray-600 rounded-b p-3 text-white outline-none focus:border-blue-500 text-sm overflow-y-auto rich-text"></div>
+                <p id="modal-save-error" class="hidden mt-3 text-sm text-red-300" role="alert"></p>
                 <div class="mt-4 flex justify-end gap-2">
                     <button onclick="exitEditMode()" class="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium">Cancel</button>
                     <button onclick="saveModal()" class="px-4 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium">Save</button>
@@ -2480,10 +3124,10 @@ async function startOnlineTracker() {
                 <table class="help-storage-table">
                     <thead><tr><th>What</th><th>Really cloud-synced?</th><th>Where it stays</th></tr></thead>
                     <tbody>
-                        <tr><td>Profile names, projects, tasks, To Dos, sound and wrap-up settings</td><td>Yes, while connected and after a successful upload</td><td>Your private GitHub repository, with a working copy in each connected browser</td></tr>
+                        <tr><td>Profile names, projects, tasks, To Dos, calendar events, sound and wrap-up settings</td><td>Yes, while connected and after a successful upload</td><td>Your private GitHub repository, with a working copy in each connected browser</td></tr>
                         <tr><td>Pending offline edits</td><td>Not until this device reconnects and uploads them</td><td>This browser; closing the page stops uploads until it is reopened</td></tr>
                         <tr><td>GitHub token</td><td>No</td><td>This browser's localStorage until Disconnect or clearing site data; never in JSON backups, linked files or the public application</td></tr>
-                        <tr><td>Selected profile/project/date, zoom, panel sizes and collapsed branches</td><td>No</td><td>This browser only. Folding is remembered separately per profile and project, including after reload</td></tr>
+                        <tr><td>Selected profile/project/date, Calendar Month/Week/layers/filters, zoom, panel sizes and collapsed branches</td><td>No</td><td>This browser only. Calendar choices are separate per profile; folding is separate per profile/project, including after reload</td></tr>
                         <tr><td>Recovery snapshots</td><td>No</td><td>This browser; included in Backup all profiles. Restoring creates a new profile that can then sync</td></tr>
                         <tr><td>Auto-save to JSON file</td><td>No live file sync</td><td>A one-way copy to a file on this device. Each profile has its own link; reconnect the link after reopening</td></tr>
                         <tr><td>Offline application cache</td><td>No project-data sync</td><td>Only the public application page, so it can reopen offline. GitHub API responses and tokens are never put in this cache</td></tr>
@@ -2516,6 +3160,7 @@ async function startOnlineTracker() {
                     <li><b>Gantt View:</b> Standard interactive timeline layout with editable columns.</li>
                     <li><b>Summary View:</b> Clean, formatted textual breakdown of all tasks with progress markers—ideal for progress presentations.</li>
                     <li><b>Overview (Dashboard):</b> Click "Overview" in the sidebar to view a high-level dashboard of all active projects, overall completion rates, and active timelines.</li>
+                    <li><b>Calendar:</b> Above To Do in the sidebar. Month and Week show this profile's To Dos, Gantt task spans and independent events together or separately.</li>
                 </ul>
 
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">2. Managing Tasks and Hierarchy</h2>
@@ -2592,7 +3237,21 @@ async function startOnlineTracker() {
                     <li><b>Summary Copy:</b> Copies the currently displayed summary branches. Use PDF or JSON when you need all hidden descendants as well.</li>
                 </ul>
 
-                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">6. To Do List</h2>
+                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">6. Calendar: Month and Week</h2>
+                <p class="mb-4">Open <b>Calendar</b> above To Do. It is another view of the active profile, not copied tasks or an external calendar service. Weeks run Monday to Sunday. This version is date-based: no hourly grid, recurrence or calendar drag-to-reschedule.</p>
+                <ul class="mb-4">
+                    <li><b>Layers:</b> Toggle <b>To Dos</b>, <b>Projects</b> and <b>Events</b> independently. To Dos appear on their assigned dates, not again on Today just because they are overdue. Gantt task bands use their real inclusive calendar-day spans; milestones use their own date. Project colors match the To Do project tags.</li>
+                    <li><b>Navigation:</b> Switch <b>Month / Week</b>, use the previous/next arrows or <b>Today</b>, or open the sliders for <b>Go to date</b>. Selecting a date opens its complete day agenda. Crowded days offer <b>+N more</b>; long bands continue across week boundaries.</li>
+                    <li><b>Filters:</b> The sliders contain Project / tagged To Dos, Gantt task levels (<b>All</b>, <b>Main</b>, or <b>Actionable</b> tasks without children), and <b>Show completed work</b>. Standalone events are independent of project/completion filters. Calendar display preferences are browser-local, remembered separately per profile, and do not create GitHub commits.</li>
+                    <li><b>Add a To Do:</b> Select its date, then <b>+ To Do</b> in the day agenda; the top <b>+ Add</b> takes you there. The shared editor pre-fills the date and offers text, reminder time, project/task linking and rich-text notes. An unsaved add-item draft in To Do is kept separate. Existing items open the same editor; its <b>Date</b> field moves the item without rescheduling Gantt.</li>
+                    <li><b>Edit Gantt:</b> Click a task band or its day-agenda entry to edit the actual source task's name, start, calendar duration, milestone status, progress and notes. Parent dates remain derived from subtasks. A parent progress value is a manual override; leave it blank to return to automatic calculation. Linked completion keeps its existing rules and impact messages. Text, notes and dates of copied To Dos remain independent.</li>
+                    <li><b>Events:</b> Select a date and <b>+ Event</b> for OOO, a birthday or other schedule information. Set a title, start/end dates (both included), and optional notes. Click an event to edit it; Delete asks for confirmation. Events have no checkbox and never move project dates or change working days.</li>
+                    <li><b>Phones:</b> Month uses finger-sized dates, item counts and thin colored span strips; tap a date for full names and editing in its agenda. Week keeps readable bands and To Dos: swipe its grid sideways to see all seven days. The rest of the page does not scroll sideways. Filters stay collapsed until requested, and rotation preserves open editor text.</li>
+                </ul>
+                <p class="mb-4">Events are saved with their profile through browser saving, private GitHub sync, enabled local JSON writing, backups/import and Recovery. Pause sync also pauses event uploads, not local saving. Existing task/To Do PDF, image and .ics exports keep their existing scopes; Calendar itself does not add another export service.</p>
+                <p class="mb-6"><b>Update the tracker on other devices/tabs before saving calendar events.</b> Events use protected <b>profile/cache format 3</b>; older apps refuse it rather than silently dropping events. Previously saved projects and To Dos are retained. Replace the website's <b>index.html</b> and reload online on each device; the worker is unchanged. <b>Do not clear site data.</b></p>
+
+                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">7. To Do List</h2>
                 <p class="mb-4">Click <b>To Do</b> in the sidebar for a day-by-day checklist. Ordinary items and project tags are independent of Gantt progress. Items linked to a <b>specific Gantt task</b> share completion with it; text, notes and dates stay independently editable.</p>
                 <h3 class="text-lg font-bold text-white mb-2">Copy Gantt Tasks to To Do</h3>
                 <ul>
@@ -2620,7 +3279,7 @@ async function startOnlineTracker() {
                     </tbody>
                 </table>
                 <p class="mb-4">Normal automatic ancestors can recalculate from changed child progress. A manual parent override stays in effect until you clear that parent's percentage in Gantt to return to automatic calculation. Unchecking a parent does not undo a previous whole-branch completion. Deletion/replacement confirmations and real choices about conflicting versions or link completion remain unchanged.</p>
-                <p class="mb-4"><b>Update the tracker on other devices/tabs before using task links or To Do notes.</b> These and remembered completion percentages use profile/cache format 2, preserved by GitHub, JSON writing, backups and Recovery. Older apps refuse the newer format rather than silently dropping links. Reload the updated application online; <b>do not clear site data</b>. No additional service or login is needed.</p>
+                <p class="mb-4"><b>Update the tracker on other devices/tabs before using task links or To Do notes.</b> These and remembered completion percentages require profile/cache format 2 or later; calendar events use format 3. GitHub, JSON writing, backups and Recovery retain this metadata. Older apps refuse the newer format rather than silently dropping links/events. Reload the updated application online; <b>do not clear site data</b>. No additional service or login is needed.</p>
                 <p class="mb-4"><b>Export:</b> In To Do view, use <b>Backups &gt; Export PDF report</b> or <b>Backups &gt; Export image</b>, below the same separator used for project exports. Both include the selected day and the Overdue section, with completed items, reminder times, project/task labels and saved notes, but without editing controls or navigation. This is not an all-dates export; unsaved add-item text is not included. Calendar .ics exports below remain available.</p>
                 <h3 class="text-lg font-bold text-white mb-2">Adding &amp; Completing Items</h3>
                 <ul>
@@ -2668,10 +3327,39 @@ async function startOnlineTracker() {
                     <li>Tagging is entirely optional—leave it on "No project" for general items. A specific task link is optional too. To keep the checklist uncluttered, no separate linked-task label is displayed. Hover the <b>project tag</b> for the linked task and its progress, or open <b>Edit Item</b> to inspect, change or remove the link. On touch screens, use Edit Item.</li>
                 </ul>
                 <p class="mb-4">To Do items are saved with everything else—they are included in your LocalStorage, Live Auto-Save file, and JSON backups automatically.</p>
-                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">7. Application Updates and Offline Access</h2>
+                <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">8. Application Updates and Offline Access</h2>
                 <p class="mb-4">Online page loads try the latest published application and update its offline copy. If the page cannot be downloaded, the last cached application is used. Already open tabs keep their current application code until reloaded; GitHub data checks are independent of this. Routine interface releases can update only index.html after the stable worker has been installed. A changed worker may show <b>Update ready</b>; finish syncing before activating it. Never clear site data just to update, because that removes unsynced work and local recovery.</p>
             </div>
         </div>
+    </div>
+    <div id="calendar-event-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4" onclick="if(event.target===this) closeCalendarEvent()">
+        <form class="online-modal bg-gray-800 rounded-lg shadow-xl w-full max-w-xl border border-gray-600 p-5 space-y-4" role="dialog" aria-modal="true" aria-labelledby="calendar-event-heading" onsubmit="event.preventDefault();saveCalendarEvent()" novalidate>
+            <div class="flex items-center justify-between gap-3">
+                <h2 id="calendar-event-heading" class="text-xl font-bold">Add event</h2>
+                <button type="button" onclick="closeCalendarEvent()" class="calendar-button" aria-label="Close event">&times;</button>
+            </div>
+            <div class="calendar-form-grid">
+                <label class="calendar-field calendar-wide">Title<input id="calendar-event-title" type="text" maxlength="200" required></label>
+                <label class="calendar-field">Start date<input id="calendar-event-start" type="date" required></label>
+                <label class="calendar-field">End date (inclusive)<input id="calendar-event-end" type="date" required></label>
+            </div>
+            <p class="text-xs text-gray-400">All-day information for this profile, not a task to complete. OOO and other events do not reschedule Gantt tasks.</p>
+            <div>
+                <label class="block text-xs text-gray-300 mb-2">Notes</label>
+                <div class="flex gap-2 mb-2">
+                    <button type="button" onclick="formatText('bold','calendar-event-notes')" class="calendar-button" aria-label="Bold event notes"><b>B</b></button>
+                    <button type="button" onclick="formatText('italic','calendar-event-notes')" class="calendar-button" aria-label="Italic event notes"><i>I</i></button>
+                    <button type="button" onclick="formatText('insertUnorderedList','calendar-event-notes')" class="calendar-button">List</button>
+                </div>
+                <div id="calendar-event-notes" contenteditable="true" role="textbox" aria-label="Event notes" aria-multiline="true" class="rich-text bg-gray-900 border border-gray-600 rounded p-3 text-sm text-white"></div>
+            </div>
+            <p id="calendar-event-error" class="hidden text-sm text-red-300" role="alert"></p>
+            <div class="flex flex-wrap justify-end gap-2">
+                <button type="button" id="calendar-event-delete" onclick="deleteCalendarEvent()" class="calendar-button calendar-danger hidden">Delete</button>
+                <button type="button" onclick="closeCalendarEvent()" class="calendar-button">Cancel</button>
+                <button type="submit" id="calendar-event-save" class="calendar-button calendar-primary">Save event</button>
+            </div>
+        </form>
     </div>
     <!-- To Do Edit Modal -->
     <div id="todo-edit-modal" onclick="if(event.target===this) closeTodoEditModal()" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-[105]">
@@ -2683,6 +3371,9 @@ async function startOnlineTracker() {
             <div class="p-4 flex flex-col">
                 <textarea id="todo-edit-text" rows="4" onkeydown="todoEditKey(event)" placeholder="What needs doing?" class="w-full bg-gray-900 border border-gray-600 rounded p-3 text-white outline-none focus:border-blue-500 text-sm resize-y"></textarea>
                 <div class="flex flex-wrap items-center gap-3 mt-4">
+                    <label class="flex items-center gap-2 text-xs text-gray-400 font-semibold">Date
+                        <input id="todo-edit-date" type="date" class="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-gray-300 outline-none cursor-pointer">
+                    </label>
                     <label class="flex items-center gap-2 text-xs text-gray-400 font-semibold">Time
                         <input id="todo-edit-time" type="time" class="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-gray-300 outline-none cursor-pointer">
                     </label>
@@ -2714,7 +3405,7 @@ async function startOnlineTracker() {
                 <div class="mt-3 text-[11px] text-gray-500">In the wording box: <b>Enter</b> saves, <b>Shift+Enter</b> adds a line. In Notes: <b>Enter</b> adds a line. <b>Esc</b> cancels.</div>
                 <div class="mt-4 flex justify-end gap-2">
                     <button onclick="closeTodoEditModal()" class="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium">Cancel</button>
-                    <button onclick="saveTodoEdit()" class="px-4 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium">Save</button>
+                    <button id="todo-edit-save" onclick="saveTodoEdit()" class="px-4 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium">Save</button>
                 </div>
             </div>
         </div>
@@ -2741,7 +3432,7 @@ async function startOnlineTracker() {
                 <label id="gantt-todo-date-row" class="text-xs text-gray-300 font-semibold">Destination date (defaults to today)
                     <input id="gantt-todo-date" type="date" onchange="updateGanttTodoPreview()" class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white">
                 </label>
-                <p class="text-xs text-gray-400">Includes standalone main tasks and folded tasks. Existing copies of the same source task on the same day are kept unchanged. Past finish dates stay in the past and can appear Overdue. Parent completion always asks before changing Gantt progress.</p>
+                <p class="text-xs text-gray-400">Includes standalone main tasks and folded tasks. Existing copies of the same source task on the same day are kept unchanged. Past finish dates stay in the past and can appear Overdue. Linked parent completion applies immediately and reports its impact without confirmation.</p>
                 <p id="gantt-todo-preview" class="text-sm text-gray-200" aria-live="polite"></p>
                 <p id="gantt-todo-error" class="hidden text-sm text-red-300" role="alert"></p>
                 <div class="flex justify-end gap-2">
@@ -2860,6 +3551,10 @@ async function startOnlineTracker() {
         let draggedProjectIndex = null;
         let currentModalType = 'task'; 
         let currentModalTaskIndex = null; 
+        let currentModalProjectId = null;
+        let currentModalTaskId = null;
+        let currentModalFromCalendar = false;
+        let currentModalCalendarFocus = null;
         let currentViewMode = 'gantt'; 
         let zoomLevel = readOnlineView('zoom', 'day');
         let dayWidth = zoomLevel === 'day' ? 40 : zoomLevel === 'week' ? 10 : 4;
@@ -2883,7 +3578,7 @@ async function startOnlineTracker() {
         const svgMobileMore = `<svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>`;
         let data = onlineStore.current().data;
         let activeProjectId = readOnlineView('activeProjectId', 'overview');
-        if (!['overview', 'todo'].includes(activeProjectId) && !data.projects.some(p => p.id === activeProjectId)) activeProjectId = 'overview';
+        if (!['overview', 'todo', CALENDAR_VIEW_ID].includes(activeProjectId) && !data.projects.some(p => p.id === activeProjectId)) activeProjectId = 'overview';
         const mobileLayoutQuery = matchMedia('(max-width: 700px), (max-width: 1024px) and (pointer: coarse)');
         let mobileLayout = mobileLayoutQuery.matches;
         let mobileSidebarOpen = false;
@@ -2950,7 +3645,7 @@ async function startOnlineTracker() {
             document.getElementById('mobile-workspace-controls').classList.toggle('hidden', !mobileLayout || !project);
             document.getElementById('mobile-workspace-controls').inert = locked;
             const title = document.getElementById('mobile-current-title');
-            title.textContent = project ? project.name : activeProjectId === 'todo' ? 'To Do' : 'Overview';
+            title.textContent = project ? project.name : activeProjectId === 'todo' ? 'To Do' : activeProjectId === CALENDAR_VIEW_ID ? 'Calendar' : 'Overview';
             title.title = title.textContent;
             title.disabled = !project || locked;
             title.setAttribute('aria-label', title.textContent + (project ? '. Project details and start date' : ''));
@@ -3555,7 +4250,7 @@ async function startOnlineTracker() {
                 document.execCommand('insertHTML', false, cleanText);
             }
         }
-        for (const id of ['modal-editor', 'todo-edit-notes']) document.getElementById(id).addEventListener('paste', pasteRichText);
+        for (const id of ['modal-editor', 'todo-edit-notes', 'calendar-event-notes']) document.getElementById(id).addEventListener('paste', pasteRichText);
         // --- UTILITIES ---
         function addDaysToDate(dateStr, daysOffset) {
             if (!dateStr) return new Date();
@@ -3842,17 +4537,23 @@ async function startOnlineTracker() {
             document.execCommand(command, false, null);
             document.getElementById(editorId).focus();
         }
-        function openModal(index = null, type = 'task') {
+        function openModal(index = null, type = 'task', projectId = activeProjectId) {
             currentModalType = type;
+            currentModalProjectId = projectId;
+            currentModalFromCalendar = activeProjectId === CALENDAR_VIEW_ID;
+            currentModalCalendarFocus = currentModalFromCalendar ? document.activeElement?.dataset.calendarFocus : null;
             document.getElementById('project-copy-todos').classList.toggle('hidden', type !== 'project');
+            document.getElementById('modal-save-error').classList.add('hidden');
             const descEl = document.getElementById('modal-desc-text');
             let item, titleStr;
             if (type === 'project') {
-                item = data.projects.find(p => p.id === activeProjectId);
+                item = data.projects.find(p => p.id === projectId);
+                currentModalTaskId = null;
                 titleStr = item.name + ' (Project Overview)';
             } else {
                 currentModalTaskIndex = index;
-                item = data.tasks[activeProjectId][index];
+                item = data.tasks[projectId][index];
+                currentModalTaskId = item.id;
                 titleStr = item.name;
             }
             document.getElementById('modal-title').innerText = titleStr;
@@ -3870,9 +4571,13 @@ async function startOnlineTracker() {
             document.getElementById('task-modal').classList.remove('hidden');
             exitEditMode(); 
         }
-        function closeModal() {
+        function closeModal(restoreFocus = true) {
+            const calendar = currentModalFromCalendar, focus = currentModalCalendarFocus;
             document.getElementById('task-modal').classList.add('hidden');
             currentModalTaskIndex = null;
+            currentModalTaskId = null; currentModalProjectId = null;
+            currentModalFromCalendar = false; currentModalCalendarFocus = null;
+            if (restoreFocus && calendar) restoreCalendarFocus(focus);
         }
         function openHelpModal() {
             document.getElementById('help-modal').classList.remove('hidden');
@@ -3882,31 +4587,35 @@ async function startOnlineTracker() {
         }
         function enterEditMode() {
             let item = currentModalType === 'project' 
-                ? data.projects.find(p => p.id === activeProjectId) 
-                : data.tasks[activeProjectId][currentModalTaskIndex];
+                ? data.projects.find(p => p.id === currentModalProjectId)
+                : data.tasks[currentModalProjectId].find(task => task.id === currentModalTaskId);
+            const calendar = currentModalFromCalendar && currentModalType === 'task';
+            document.getElementById('modal-task-fields').classList.toggle('hidden', !calendar);
+            if (calendar) prepareCalendarTaskEditor();
             let descHTML = item.description || "";
             if (descHTML === "<br>") descHTML = "";
             
             document.getElementById('modal-editor').innerHTML = TrackerOnline.sanitizeRichText(descHTML);
             document.getElementById('modal-view').classList.add('hidden');
             document.getElementById('modal-edit').classList.remove('hidden');
-            document.getElementById('modal-editor').focus();
+            document.getElementById(calendar ? 'calendar-task-name' : 'modal-editor').focus();
         }
         function exitEditMode() {
             document.getElementById('modal-edit').classList.add('hidden');
             document.getElementById('modal-view').classList.remove('hidden');
         }
         function saveModal() {
+            if (currentModalFromCalendar && currentModalType === 'task') { saveCalendarTask(); return; }
             let item = currentModalType === 'project' 
-                ? data.projects.find(p => p.id === activeProjectId) 
-                : data.tasks[activeProjectId][currentModalTaskIndex];
+                ? data.projects.find(p => p.id === currentModalProjectId)
+                : data.tasks[currentModalProjectId].find(task => task.id === currentModalTaskId);
             let editorHTML = document.getElementById('modal-editor').innerHTML;
             if (editorHTML === "<br>" || editorHTML.trim() === "") editorHTML = "";
             item.description = TrackerOnline.sanitizeRichText(editorHTML);
             
             exitEditMode();
             updateDataAndRender(); 
-            openModal(currentModalType === 'project' ? null : currentModalTaskIndex, currentModalType); 
+            openModal(currentModalType === 'project' ? null : currentModalTaskIndex, currentModalType, currentModalProjectId);
         }
         // ==================== TO DO MODULE (self-contained) ====================
         const TODO_PALETTE = ['#3b82f6','#10b981','#f59e0b','#a855f7','#ec4899','#14b8a6','#f97316','#6366f1'];
@@ -4298,7 +5007,7 @@ async function startOnlineTracker() {
             const changed = projectId !== item?.projectId || taskId !== (item?.taskId || '');
             document.getElementById('todo-edit-completion').value = '';
             document.getElementById('todo-edit-completion-row').classList.toggle('hidden',
-                !task || !changed || (task.progress === 100) === !!item?.done);
+                todoEditRef?.creating || !task || !changed || (task.progress === 100) === !!item?.done);
             document.getElementById('todo-edit-link-info').textContent = task ?
                 'Completion follows "' + task.name + '" (' + task.progress + '%). Text, notes and dates stay independent.' :
                 item?.taskId ? 'Saving without a task link stops completion updates. Existing Gantt progress is not undone.' :
@@ -4359,11 +5068,12 @@ async function startOnlineTracker() {
             if (!data.todos) data.todos = {};
             Object.keys(data.todos).forEach(k => { if (!data.todos[k] || data.todos[k].length === 0) delete data.todos[k]; });
             TrackerOnline.syncLinkedTodos(data);
-            if (!persistOnlineData()) { renderTodoView(); return false; }
+            if (!persistOnlineData()) { renderTodoView(); restoreTodoDraft(draft); return false; }
             syncToFile();
             updateTodoBadge();
             renderTodoView();
             restoreTodoDraft(draft);
+            if (activeProjectId === CALENDAR_VIEW_ID) renderCalendarView();
             return true;
         }
         function openTodo() {
@@ -4403,17 +5113,16 @@ async function startOnlineTracker() {
             const i = list.findIndex(x => x.id === id);
             if (i > -1) { list.splice(i, 1); saveTodos(); }
         }
-        function editTodo(dateStr, id) {
-            const it = (data.todos[dateStr] || []).find(x => x.id === id);
-            if (!it) return;
+        function editTodo(dateStr, id = null, projectId = '') {
+            const creating = id === null;
+            const it = creating ? { text: '', time: null, projectId, description: '' } : (data.todos[dateStr] || []).find(x => x.id === id);
+            if (!it) { showOnlineError(new Error('This To Do no longer exists.')); return; }
             const modal = document.getElementById('todo-edit-modal');
             const box = document.getElementById('todo-edit-text');
-            if (!modal || !box) {
-                const v = prompt("Edit item:", it.text);
-                if (v !== null && v.trim() !== "") { it.text = v.trim(); saveTodos(); }
-                return;
-            }
-            todoEditRef = { date: dateStr, id: id };
+            todoEditRef = { date: dateStr, id, creating, focus: document.activeElement?.dataset.calendarFocus };
+            document.getElementById('todo-edit-title').textContent = creating ? 'Add To Do' : 'Edit Item';
+            document.getElementById('todo-edit-save').textContent = creating ? 'Add To Do' : 'Save';
+            document.getElementById('todo-edit-date').value = dateStr;
             box.value = it.text;
             const timeEl = document.getElementById('todo-edit-time');
             if (timeEl) timeEl.value = it.time || '';
@@ -4430,26 +5139,33 @@ async function startOnlineTracker() {
             modal.classList.remove('hidden');
             try { box.focus(); box.select(); } catch (e) {}
         }
-        function closeTodoEditModal() {
+        function closeTodoEditModal(restoreFocus = true) {
             const id = todoEditRef?.id;
+            const focus = todoEditRef?.focus;
             todoEditRef = null;
             const modal = document.getElementById('todo-edit-modal');
             if (modal) modal.classList.add('hidden');
+            if (!restoreFocus) return;
+            if (activeProjectId === CALENDAR_VIEW_ID) { restoreCalendarFocus(focus); return; }
             const target = id && document.querySelector('[data-todo-id="' + id + '"] .todo-item-text');
             if (target?.getClientRects().length) { target.tabIndex = 0; target.focus({ preventScroll: true }); }
         }
         function stageTodoEdit() {
             if (!todoEditRef) throw new Error('Open a To Do before saving.');
             const next = JSON.parse(JSON.stringify(data));
-            const item = (next.todos[todoEditRef.date] || []).find(todo => todo.id === todoEditRef.id);
+            const creating = todoEditRef.creating;
+            const item = creating ? { id: generateId(), text: '', done: false, projectId: null, time: null, notified: false,
+                snoozeUntil: null, icsSeq: 0 } : (next.todos[todoEditRef.date] || []).find(todo => todo.id === todoEditRef.id);
             if (!item) throw new Error('This To Do no longer exists.');
             const text = document.getElementById('todo-edit-text').value.trim();
             if (!text) throw new Error('Enter text for the To Do.');
+            const date = document.getElementById('todo-edit-date').value;
+            if (!TrackerOnline.validDate(date)) throw new Error('Choose a valid To Do date.');
             const projectId = document.getElementById('todo-edit-proj').value || null;
             const taskId = document.getElementById('todo-edit-task').value;
             const changed = projectId !== item.projectId || taskId !== (item.taskId || '');
             const newTime = document.getElementById('todo-edit-time').value || null;
-            if (newTime !== item.time) { item.notified = false; item.snoozeUntil = null; }
+            if (newTime !== item.time || date !== todoEditRef.date) { item.notified = false; item.snoozeUntil = null; }
             item.text = text; item.time = newTime; item.projectId = projectId;
             if (taskId) item.taskId = taskId;
             else delete item.taskId;
@@ -4458,14 +5174,20 @@ async function startOnlineTracker() {
             let completion = null;
             if (changed && taskId) {
                 const task = TrackerOnline.taskBranch(next, projectId, taskId).task;
-                if ((task.progress === 100) !== item.done) {
+                if (creating) item.done = task.progress === 100;
+                else if ((task.progress === 100) !== item.done) {
                     const choice = document.getElementById('todo-edit-completion').value;
                     if (!['gantt', 'todo'].includes(choice)) throw new Error('Choose which completion status to keep before linking.');
                     if (choice === 'todo') completion = item.done;
                     else item.done = task.progress === 100;
                 }
             }
-            return { next, item, completion };
+            if (creating || date !== todoEditRef.date) {
+                if (!creating) next.todos[todoEditRef.date] = next.todos[todoEditRef.date].filter(todo => todo.id !== item.id);
+                if (!next.todos[date]) next.todos[date] = [];
+                next.todos[date].push(item);
+            }
+            return { next, item, completion, date };
         }
         function saveTodoEdit() {
             const errorBox = document.getElementById('todo-edit-error');
@@ -4477,8 +5199,11 @@ async function startOnlineTracker() {
                     plan = TrackerOnline.setTodoCompletion(staged.next, staged.item, staged.completion);
                 }
                 data = TrackerOnline.normalizeData(staged.next);
+                Object.assign(todoEditRef, { id: staged.item.id, date: staged.date, creating: false });
                 if (saveTodos()) {
+                    if (activeProjectId === CALENDAR_VIEW_ID && calendarOptions().date !== staged.date) changeCalendarOptions({ date: staged.date });
                     closeTodoEditModal();
+                    if (staged.item.time) requestReminderPermission();
                     notifyTodoCompletion(plan, staged.completion);
                 }
             } catch (error) {
@@ -5056,7 +5781,7 @@ async function startOnlineTracker() {
         }
         function render() {
             refreshMobileUI();
-            const projectOpen = activeProjectId && !['overview', 'todo'].includes(activeProjectId);
+            const projectOpen = activeProjectId && !['overview', 'todo', CALENDAR_VIEW_ID].includes(activeProjectId);
             document.getElementById('toolbar-project-controls').style.display = projectOpen ? 'flex' : 'none';
             if (!projectOpen) document.getElementById('zoom-menu').open = false;
             const branchRows = taskDisplayRows(data.tasks[activeProjectId] || [], true).filter(row => row.hasChildren);
@@ -5067,6 +5792,7 @@ async function startOnlineTracker() {
             document.getElementById('collapse-all-subtasks').disabled = branchRows.every(row => collapsed.has(row.task.id));
             document.getElementById('expand-all-subtasks').disabled = !branchRows.some(row => collapsed.has(row.task.id));
             document.getElementById('todo-view').style.display = 'none';
+            document.getElementById('calendar-view').style.display = 'none';
             const sidebar = document.getElementById('sidebar');
             const tp = document.getElementById('task-panel');
             sidebar.style.width = `${sidebarWidth}px`;
@@ -5077,6 +5803,8 @@ async function startOnlineTracker() {
             if (document.getElementById('task-resizer')) document.getElementById('task-resizer').classList.toggle('panel-collapsed', taskPanelWidth === 0);
             document.getElementById('btn-overview').className = `p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0 ${activeProjectId === 'overview' ? 'bg-gray-700 text-white border-l-4 border-l-blue-500 pl-2' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`;
             document.getElementById('btn-todo').className = `p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0 ${activeProjectId === 'todo' ? 'bg-gray-700 text-white border-l-4 border-l-blue-500 pl-2' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`;
+            document.getElementById('btn-calendar').className = `p-3 border-b border-gray-700 cursor-pointer flex items-center gap-2 font-semibold transition-colors shrink-0 text-left ${activeProjectId === CALENDAR_VIEW_ID ? 'bg-gray-700 text-white border-l-4 border-l-blue-500 pl-2' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`;
+            document.getElementById('btn-calendar').setAttribute('aria-current', activeProjectId === CALENDAR_VIEW_ID ? 'page' : 'false');
             updateTodoBadge();
             document.getElementById('project-list').innerHTML = data.projects.map((p, index) => `
                 <div class="group flex justify-between items-center p-2 rounded cursor-pointer mb-1 project-row ${p.id === activeProjectId ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-gray-700/50 text-gray-300'}" ${mobileLayout ? 'role="button" tabindex="0"' : ''} draggable="${!mobileLayout}" onclick="openProject('${p.id}')">
@@ -5121,7 +5849,7 @@ async function startOnlineTracker() {
                 renderTodoView();
                 return;
             }
-            if (!activeProjectId || activeProjectId === 'overview') {
+            if (!activeProjectId || activeProjectId === 'overview' || activeProjectId === CALENDAR_VIEW_ID) {
                 document.getElementById('workspace').style.display = 'none';
                 document.getElementById('summary-view').style.display = 'none';
                 document.getElementById('view-toggle').style.display = 'none';
@@ -5133,8 +5861,11 @@ async function startOnlineTracker() {
                 btnExportImg.classList.add('hidden');
                 exportDivider.style.display = 'none';
                 
-                document.getElementById('overview-view').style.display = 'block';
-                if(activeProjectId === 'overview') renderOverviewView();
+                document.getElementById('overview-view').style.display = activeProjectId === CALENDAR_VIEW_ID ? 'none' : 'block';
+                if (activeProjectId === CALENDAR_VIEW_ID) {
+                    document.getElementById('calendar-view').style.display = 'block';
+                    renderCalendarView();
+                } else if (activeProjectId === 'overview') renderOverviewView();
                 return;
             }
             document.getElementById('overview-view').style.display = 'none';
@@ -5549,7 +6280,12 @@ async function startOnlineTracker() {
             const actions = document.getElementById('mobile-actions-modal');
             const copy = document.getElementById('gantt-todo-modal');
             const todoEdit = document.getElementById('todo-edit-modal');
-            if (!copy.classList.contains('hidden')) {
+            const calendarEvent = document.getElementById('calendar-event-modal');
+            const taskModal = document.getElementById('task-modal');
+            if (!calendarEvent.classList.contains('hidden')) {
+                trapMobileFocus(event, calendarEvent);
+                if (event.key === 'Escape') { event.preventDefault(); closeCalendarEvent(); }
+            } else if (!copy.classList.contains('hidden')) {
                 trapMobileFocus(event, copy);
                 if (event.key === 'Escape') { event.preventDefault(); closeGanttTodoDialog(); }
             } else if (!todoEdit.classList.contains('hidden')) {
@@ -5558,6 +6294,9 @@ async function startOnlineTracker() {
             } else if (!actions.classList.contains('hidden')) {
                 trapMobileFocus(event, actions);
                 if (event.key === 'Escape') { event.preventDefault(); closeMobileActions(); }
+            } else if (!taskModal.classList.contains('hidden')) {
+                trapMobileFocus(event, taskModal);
+                if (event.key === 'Escape') { event.preventDefault(); closeModal(); }
             } else if (mobileToolbarPanel) {
                 trapMobileFocus(event, document.getElementById('mobile-toolbar-modal'));
                 if (event.key === 'Escape' && !document.querySelector('#mobile-toolbar-modal .toolbar-menu[open]')) {
