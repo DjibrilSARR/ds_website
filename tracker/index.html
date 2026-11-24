@@ -1901,15 +1901,21 @@ async function startOnlineTracker() {
     document.addEventListener('click', event => {
         if (!(event.target instanceof Element)) return;
         document.querySelectorAll('.toolbar-menu[open]').forEach(menu => {
-            if (!menu.contains(event.target) || event.target.closest('button')) menu.open = false;
+            if (!menu.contains(event.target) || event.target.closest('button')) {
+                menu.open = false;
+                calendarSettingsToggled(menu);
+            }
         });
     });
     document.addEventListener('keydown', event => {
         const menu = event.target instanceof Element ? event.target.closest('.toolbar-menu') : null;
-        if (menu && !event.ctrlKey && !event.altKey && !event.metaKey &&
+        if (menu && !event.target.closest('input, select, textarea, [contenteditable]') && !event.ctrlKey && !event.altKey && !event.metaKey &&
             ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-            document.querySelectorAll('.toolbar-menu[open]').forEach(other => { if (other !== menu) other.open = false; });
+            document.querySelectorAll('.toolbar-menu[open]').forEach(other => {
+                if (other !== menu) { other.open = false; calendarSettingsToggled(other); }
+            });
             menu.open = true;
+            calendarSettingsToggled(menu);
             const buttons = Array.from(menu.querySelectorAll(':scope > div > button:not(:disabled)'))
                 .filter(button => button.getClientRects().length);
             if (buttons.length) {
@@ -1923,7 +1929,11 @@ async function startOnlineTracker() {
         }
         if (event.key === 'Escape') {
             const openMenu = document.querySelector('.toolbar-menu[open]');
-            if (openMenu) { openMenu.open = false; openMenu.querySelector('summary').focus(); }
+            if (openMenu) {
+                openMenu.open = false;
+                calendarSettingsToggled(openMenu);
+                openMenu.querySelector('summary').focus();
+            }
         }
         if (event.key === 'Escape') {
             if (!document.getElementById('profile-import-modal').classList.contains('hidden')) closeOnlineImport();
@@ -1987,9 +1997,16 @@ function calendarOptions() {
 }
 
 function changeCalendarOptions(changes, redraw = true) {
+    const profile = onlineStore.current(), previous = profile.view.calendar;
     const options = { ...calendarOptions(), ...changes };
     try { onlineStore.setView('calendar', options); }
-    catch (error) { showOnlineError(error); return false; }
+    catch (error) {
+        if (previous === undefined) delete profile.view.calendar;
+        else profile.view.calendar = previous;
+        showOnlineError(error);
+        if (redraw) renderCalendarView();
+        return false;
+    }
     if (redraw) renderCalendarView();
     return true;
 }
@@ -2046,6 +2063,30 @@ function selectCalendarDate(date, reveal = false) {
 function toggleCalendarLayer(layer) {
     const options = calendarOptions();
     changeCalendarOptions({ layers: { ...options.layers, [layer]: !options.layers[layer] } });
+}
+
+function toggleCalendarSettings() {
+    const opening = !document.getElementById('calendar-settings').open;
+    if (changeCalendarOptions({ filtersOpen: opening }) && opening)
+        document.getElementById(mobileLayout ? 'calendar-mode-mobile' : 'calendar-layer-todos').focus({ preventScroll: true });
+}
+
+function calendarSettingsToggled(menu) {
+    if (menu.id !== 'calendar-settings' || activeProjectId !== CALENDAR_VIEW_ID) return;
+    const options = calendarOptions();
+    if (menu.open !== options.filtersOpen && !changeCalendarOptions({ filtersOpen: menu.open }, false))
+        menu.open = options.filtersOpen;
+    document.getElementById('calendar-filter-toggle').setAttribute('aria-expanded', String(menu.open));
+    if (menu.open && !options.filtersOpen)
+        document.getElementById(mobileLayout ? 'calendar-mode-mobile' : 'calendar-layer-todos').focus({ preventScroll: true });
+}
+
+function fitCalendarPeriod() {
+    if (activeProjectId !== CALENDAR_VIEW_ID) return;
+    const period = document.getElementById('calendar-period');
+    if (!period.dataset.compactLabel) return;
+    period.textContent = mobileLayout ? period.dataset.compactLabel : period.title;
+    if (period.scrollWidth > period.clientWidth) period.textContent = period.dataset.compactLabel;
 }
 
 function calendarEntryKey(entry) {
@@ -2163,9 +2204,9 @@ function calendarRenderWeek(entries, dates, options) {
 function renderCalendarView() {
     if (activeProjectId !== CALENDAR_VIEW_ID) return;
     const options = calendarOptions(), focused = document.activeElement?.dataset.calendarFocus;
-    document.getElementById('calendar-month').setAttribute('aria-pressed', String(options.mode === 'month'));
-    document.getElementById('calendar-week').setAttribute('aria-pressed', String(options.mode === 'week'));
-    for (const layer of ['todos', 'projects', 'events']) document.getElementById('calendar-layer-' + layer).setAttribute('aria-pressed', String(options.layers[layer]));
+    document.getElementById('calendar-mode').value = options.mode;
+    document.getElementById('calendar-mode-mobile').value = options.mode;
+    for (const layer of ['todos', 'projects', 'events']) document.getElementById('calendar-layer-' + layer).checked = options.layers[layer];
     const projectSelect = document.getElementById('calendar-project');
     const projects = '<option value="">All projects + unassigned</option>' +
         data.projects.map(project => '<option value="' + project.id + '">' + todoEsc(project.name) + '</option>').join('');
@@ -2174,8 +2215,13 @@ function renderCalendarView() {
     document.getElementById('calendar-task-scope').value = options.taskScope;
     document.getElementById('calendar-completed').checked = options.showCompleted;
     document.getElementById('calendar-jump').value = options.date;
-    document.getElementById('calendar-filters').classList.toggle('hidden', !options.filtersOpen);
+    const settings = document.getElementById('calendar-settings');
+    settings.open = options.filtersOpen;
     document.getElementById('calendar-filter-toggle').setAttribute('aria-expanded', String(options.filtersOpen));
+    if (document.activeElement?.id === (mobileLayout ? 'calendar-mode' : 'calendar-mode-mobile'))
+        document.getElementById(mobileLayout && !options.filtersOpen ? 'calendar-filter-toggle' :
+            mobileLayout ? 'calendar-mode-mobile' : 'calendar-mode').focus({ preventScroll: true });
+    positionMobileMenu(settings);
     const shell = document.getElementById('calendar-grid-scroll');
     shell.classList.toggle('calendar-week-mode', options.mode === 'week');
     shell.classList.toggle('calendar-month-mode', options.mode === 'month');
@@ -2183,18 +2229,22 @@ function renderCalendarView() {
         const range = calendarRange(options);
         const entries = TrackerOnline.calendarEntries(data, range.start, range.end, options);
         const selected = new Date(options.date + 'T12:00:00');
-        const label = options.mode === 'month' ? selected.toLocaleDateString('en-US', { month: mobileLayout ? 'short' : 'long', year: 'numeric' }) :
-            new Date(range.start + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' - ' +
-            new Date(range.end + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        document.getElementById('calendar-period').textContent = label;
-        document.getElementById('calendar-period').title = label;
+        const start = new Date(range.start + 'T12:00:00'), end = new Date(range.end + 'T12:00:00');
+        const fullLabel = options.mode === 'month' ? selected.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) :
+            new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).formatRange(start, end);
+        const compactLabel = options.mode === 'month' ?
+            selected.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) :
+            start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + '-' +
+            (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() ? end.getDate() :
+                end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+        const period = document.getElementById('calendar-period');
+        period.dataset.compactLabel = compactLabel;
+        period.title = fullLabel;
+        period.setAttribute('aria-label', fullLabel);
+        fitCalendarPeriod();
         document.getElementById('calendar-grid').innerHTML = '<div class="calendar-weekdays">' +
             ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => '<span>' + day + '</span>').join('') +
             '</div>' + range.rows.map(dates => calendarRenderWeek(entries, dates, options)).join('');
-        document.getElementById('calendar-hint').textContent = mobileLayout && options.mode === 'week' ?
-            'Swipe the week sideways. Tap a date for its full agenda or to add an item.' :
-            mobileLayout ? 'Tap a date for its full agenda or to add an item. Colored strips show project/event spans.' :
-                'Select a date to add a To Do or event. Click a band or item to edit its source.';
         const dayEntries = entries.filter(entry => entry.startDate <= options.date && entry.endDate >= options.date);
         document.getElementById('calendar-day-title').textContent = todoLongDate(options.date);
         document.getElementById('calendar-day-count').textContent = dayEntries.length + ' visible item' + (dayEntries.length === 1 ? '' : 's');
@@ -2222,11 +2272,6 @@ function restoreCalendarFocus(key) {
     const target = key && document.querySelector('[data-calendar-focus="' + key + '"]');
     if (target?.getClientRects().length) target.focus({ preventScroll: true });
     else if (activeProjectId === CALENDAR_VIEW_ID) document.getElementById('calendar-add-todo').focus({ preventScroll: true });
-}
-
-function revealCalendarAdd() {
-    document.getElementById('calendar-day').scrollIntoView({ block: 'nearest' });
-    document.getElementById('calendar-add-todo').focus({ preventScroll: true });
 }
 
 function addCalendarTodo() {
@@ -2523,33 +2568,43 @@ function saveCalendarTask() {
         .todo-new-link-row.hidden { display: none; }
         #todo-edit-notes { min-height: 100px; max-height: 180px; overflow-y: auto; }
         #calendar-view { padding: 20px; min-width: 0; }
-        .calendar-top, .calendar-navigation, .calendar-layers { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-        .calendar-top h2 { flex: 1; min-width: 0; font-size: 26px; font-weight: 800; }
-        .calendar-button, .calendar-mode button, .calendar-layer {
+        .calendar-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .calendar-navigation { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+        .calendar-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .calendar-button {
             min-height: 36px; padding: 6px 12px; border: 1px solid #4b5563; border-radius: 6px;
-            background: #1f2937; color: #d1d5db; font-size: 13px; font-weight: 600;
+            background: #1f2937; color: #d1d5db; font-size: 13px; font-weight: 600; white-space: nowrap;
         }
-        .calendar-button:hover, .calendar-mode button:hover, .calendar-layer:hover { background: #374151; color: white; }
-        .calendar-mode { display: flex; gap: 2px; }
-        .calendar-mode button[aria-pressed="true"], .calendar-layer[aria-pressed="true"] { background: #1e3a5f; border-color: #60a5fa; color: #dbeafe; }
+        .calendar-button:hover { background: #374151; color: white; }
+        .calendar-button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+        .calendar-nav-button { width: 36px; padding: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        #calendar-mode { min-width: 86px; }
+        .calendar-settings { position: relative; flex-shrink: 0; }
+        .calendar-settings[open] > summary { background: #374151; color: white; }
         .calendar-primary { background: #2563eb; border-color: #3b82f6; color: white; }
         .calendar-danger { color: #fca5a5; }
-        #calendar-period { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .calendar-layers { gap: 6px; }
-        .calendar-layer { flex: 1; }
+        #calendar-period { min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .calendar-filters, .calendar-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .calendar-filters { padding: 12px; margin-bottom: 12px; border: 1px solid #374151; border-radius: 8px; background: #111827; }
-        .calendar-filters.hidden, .calendar-form-grid.hidden { display: none; }
+        .calendar-filters {
+            position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 380px; max-width: calc(100vw - 40px);
+            max-height: calc(100dvh - 140px); overflow-y: auto; overscroll-behavior: contain; padding: 12px;
+            border: 1px solid #586577; border-radius: 8px; background: #111827; box-shadow: 0 12px 28px #0006;
+        }
+        .calendar-form-grid.hidden { display: none; }
+        .calendar-layer-options { min-width: 0; }
+        .calendar-layer-options legend { margin-bottom: 4px; color: #d1d5db; font-size: 12px; font-weight: 600; }
+        .calendar-layers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
         .calendar-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; font-weight: 600; color: #d1d5db; }
+        .calendar-field.calendar-mode-setting { display: none; }
         .calendar-field input, .calendar-field select {
             width: 100%; min-width: 0; min-height: 36px; padding: 7px; border: 1px solid #4b5563;
             border-radius: 5px; background: #111827; color: white; font-size: 14px; font-weight: 400;
         }
         .calendar-field input:disabled { opacity: 0.6; }
         .calendar-wide { grid-column: 1 / -1; }
-        .calendar-check-field { display: flex; align-items: center; gap: 8px; min-height: 36px; color: #d1d5db; font-size: 13px; }
-        .calendar-check-field input { width: 17px; height: 17px; accent-color: #3b82f6; }
-        #calendar-hint { margin: 0 0 12px; color: #9ca3af; font-size: 12px; }
+        .calendar-check-field { display: flex; align-items: center; gap: 6px; min-height: 36px; min-width: 0; color: #d1d5db; font-size: 13px; cursor: pointer; }
+        .calendar-check-field input { width: 17px; height: 17px; flex-shrink: 0; accent-color: #3b82f6; }
+        .calendar-check-field:focus-within { outline: 2px solid #93c5fd; outline-offset: 2px; border-radius: 4px; }
         .calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
         #calendar-grid-scroll { min-width: 0; max-width: 100%; overflow-x: auto; border: 1px solid #374151; border-radius: 8px; background: #111827; }
         #calendar-grid { min-width: 560px; --calendar-band-height: 26px; }
@@ -2602,13 +2657,17 @@ function saveCalendarTask() {
         @media (max-width: 1300px) { .calendar-layout { grid-template-columns: minmax(0, 1fr); } }
         .mobile-layout #calendar-view { padding: 12px 4px 28px; scrollbar-width: none; }
         .mobile-layout #calendar-view::-webkit-scrollbar { display: none; }
-        .mobile-layout .calendar-top, .mobile-layout .calendar-navigation, .mobile-layout .calendar-layers { margin-left: 6px; margin-right: 6px; gap: 5px; margin-bottom: 8px; }
-        .mobile-layout .calendar-top h2 { font-size: 22px; }
-        .mobile-layout .calendar-button, .mobile-layout .calendar-mode button, .mobile-layout .calendar-layer { min-width: 44px; min-height: 44px; padding: 7px 9px; }
+        .mobile-layout .calendar-toolbar { margin: 0 6px 8px; gap: 5px; }
+        .mobile-layout .calendar-navigation { gap: 3px; }
+        .mobile-layout .calendar-toolbar-actions { gap: 5px; }
+        .mobile-layout .calendar-button { min-width: 44px; min-height: 44px; padding: 7px 9px; }
+        .mobile-layout .calendar-nav-button { width: 44px; padding: 0; }
         .mobile-layout #calendar-period { font-size: 14px; }
-        .mobile-layout .calendar-filters { margin: 0 6px 10px; gap: 10px; }
+        .mobile-layout #calendar-mode { display: none; }
+        .mobile-layout .calendar-field.calendar-mode-setting { display: flex; }
+        .mobile-layout .calendar-filters { position: fixed; max-width: calc(100vw - 24px); gap: 10px; }
+        .mobile-layout .calendar-check-field { min-height: 44px; }
         .mobile-layout .calendar-field input, .mobile-layout .calendar-field select { min-height: 44px; font-size: 16px; }
-        .mobile-layout #calendar-hint { padding: 0 6px; }
         .mobile-layout #calendar-grid { min-width: 0; --calendar-band-height: 4px; }
         .mobile-layout .calendar-week-mode #calendar-grid { min-width: 700px; --calendar-band-height: 44px; }
         .mobile-layout .calendar-date { min-height: 64px; padding: 6px 4px; }
@@ -2943,44 +3002,52 @@ function saveCalendarTask() {
             </div>
         </div>
         <div class="flex-1 overflow-y-auto bg-gray-900 hidden" id="calendar-view">
-            <div class="calendar-top">
-                <h2>Calendar</h2>
-                <div class="calendar-mode" role="group" aria-label="Calendar view">
-                    <button type="button" id="calendar-month" onclick="changeCalendarOptions({mode:'month'})" aria-pressed="true">Month</button>
-                    <button type="button" id="calendar-week" onclick="changeCalendarOptions({mode:'week'})" aria-pressed="false">Week</button>
+            <div class="calendar-toolbar" role="group" aria-label="Calendar navigation and settings">
+                <div class="calendar-navigation">
+                    <button type="button" id="calendar-prev" class="calendar-button calendar-nav-button" onclick="navigateCalendar(-1)" aria-label="Previous calendar period">&lsaquo;</button>
+                    <h2 id="calendar-period" aria-live="polite"></h2>
+                    <button type="button" id="calendar-next" class="calendar-button calendar-nav-button" onclick="navigateCalendar(1)" aria-label="Next calendar period">&rsaquo;</button>
                 </div>
-                <button type="button" class="calendar-button calendar-primary" onclick="revealCalendarAdd()" aria-label="Add an item to the selected date">+ Add</button>
-            </div>
-            <div class="calendar-navigation">
-                <button type="button" id="calendar-prev" class="calendar-button" onclick="navigateCalendar(-1)" aria-label="Previous calendar period">&lsaquo;</button>
-                <h3 id="calendar-period" aria-live="polite"></h3>
-                <button type="button" id="calendar-next" class="calendar-button" onclick="navigateCalendar(1)" aria-label="Next calendar period">&rsaquo;</button>
-                <button type="button" id="calendar-today" class="calendar-button" onclick="selectCalendarDate(todoTodayStr())">Today</button>
-                <button type="button" id="calendar-filter-toggle" class="calendar-button" onclick="changeCalendarOptions({filtersOpen:!calendarOptions().filtersOpen})" aria-label="Calendar filters and date jump" aria-expanded="false" aria-controls="calendar-filters">
-                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="#1f2937"/><circle cx="16" cy="12" r="2" fill="#1f2937"/><circle cx="10" cy="18" r="2" fill="#1f2937"/></svg>
-                </button>
-            </div>
-            <div class="calendar-layers" role="group" aria-label="Calendar layers">
-                <button type="button" id="calendar-layer-todos" class="calendar-layer" onclick="toggleCalendarLayer('todos')" aria-pressed="true">To Dos</button>
-                <button type="button" id="calendar-layer-projects" class="calendar-layer" onclick="toggleCalendarLayer('projects')" aria-pressed="true">Projects</button>
-                <button type="button" id="calendar-layer-events" class="calendar-layer" onclick="toggleCalendarLayer('events')" aria-pressed="true">Events</button>
-            </div>
-            <div id="calendar-filters" class="calendar-filters hidden">
-                <label class="calendar-field">Project / tagged To Dos
-                    <select id="calendar-project" onchange="changeCalendarOptions({projectId:this.value})"></select>
-                </label>
-                <label class="calendar-field">Gantt task levels
-                    <select id="calendar-task-scope" onchange="changeCalendarOptions({taskScope:this.value})">
-                        <option value="all">All tasks</option><option value="main">Main tasks only</option><option value="leaf">Actionable tasks only</option>
+                <div class="calendar-toolbar-actions">
+                    <select id="calendar-mode" class="calendar-button" aria-label="Calendar view" onchange="changeCalendarOptions({mode:this.value})">
+                        <option value="month">Month</option><option value="week">Week</option>
                     </select>
-                </label>
-                <label class="calendar-field">Go to date
-                    <input type="date" id="calendar-jump" onchange="selectCalendarDate(this.value)">
-                </label>
-                <label class="calendar-check-field"><input type="checkbox" id="calendar-completed" onchange="changeCalendarOptions({showCompleted:this.checked})" checked>Show completed work</label>
-                <p class="calendar-wide text-xs text-gray-400">Events are independent of project filters. These display preferences stay in this browser.</p>
+                    <button type="button" id="calendar-today" class="calendar-button" onclick="selectCalendarDate(todoTodayStr())">Today</button>
+                    <details id="calendar-settings" class="toolbar-menu calendar-settings" ontoggle="calendarSettingsToggled(this)">
+                        <summary id="calendar-filter-toggle" class="calendar-button calendar-nav-button" onclick="event.preventDefault();toggleCalendarSettings()" aria-label="Calendar settings" title="Calendar settings" aria-expanded="false" aria-controls="calendar-filters">
+                            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="#1f2937"/><circle cx="16" cy="12" r="2" fill="#1f2937"/><circle cx="10" cy="18" r="2" fill="#1f2937"/></svg>
+                        </summary>
+                        <div id="calendar-filters" class="calendar-filters" role="region" aria-label="Calendar settings">
+                            <label class="calendar-field calendar-mode-setting calendar-wide">View
+                                <select id="calendar-mode-mobile" onchange="changeCalendarOptions({mode:this.value})">
+                                    <option value="month">Month</option><option value="week">Week</option>
+                                </select>
+                            </label>
+                            <fieldset class="calendar-layer-options calendar-wide">
+                                <legend>Show</legend>
+                                <div class="calendar-layers">
+                                    <label class="calendar-check-field"><input type="checkbox" id="calendar-layer-todos" onchange="toggleCalendarLayer('todos')" checked>To Dos</label>
+                                    <label class="calendar-check-field"><input type="checkbox" id="calendar-layer-projects" onchange="toggleCalendarLayer('projects')" checked>Projects</label>
+                                    <label class="calendar-check-field"><input type="checkbox" id="calendar-layer-events" onchange="toggleCalendarLayer('events')" checked>Events</label>
+                                </div>
+                            </fieldset>
+                            <label class="calendar-field">Project / tagged To Dos
+                                <select id="calendar-project" onchange="changeCalendarOptions({projectId:this.value})"></select>
+                            </label>
+                            <label class="calendar-field">Gantt task levels
+                                <select id="calendar-task-scope" onchange="changeCalendarOptions({taskScope:this.value})">
+                                    <option value="all">All tasks</option><option value="main">Main tasks only</option><option value="leaf">Actionable tasks only</option>
+                                </select>
+                            </label>
+                            <label class="calendar-field">Go to date
+                                <input type="date" id="calendar-jump" onchange="selectCalendarDate(this.value)">
+                            </label>
+                            <label class="calendar-check-field"><input type="checkbox" id="calendar-completed" onchange="changeCalendarOptions({showCompleted:this.checked})" checked>Show completed work</label>
+                            <p class="calendar-wide text-xs text-gray-400">Events are independent of project filters. These display preferences stay in this browser.</p>
+                        </div>
+                    </details>
+                </div>
             </div>
-            <p id="calendar-hint"></p>
             <div class="calendar-layout">
                 <div id="calendar-grid-scroll" role="region" aria-label="Calendar dates and schedule" tabindex="0"><div id="calendar-grid"></div></div>
                 <section id="calendar-day" aria-labelledby="calendar-day-title">
@@ -3240,13 +3307,13 @@ function saveCalendarTask() {
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">6. Calendar: Month and Week</h2>
                 <p class="mb-4">Open <b>Calendar</b> above To Do. It is another view of the active profile, not copied tasks or an external calendar service. Weeks run Monday to Sunday. This version is date-based: no hourly grid, recurrence or calendar drag-to-reschedule.</p>
                 <ul class="mb-4">
-                    <li><b>Layers:</b> Toggle <b>To Dos</b>, <b>Projects</b> and <b>Events</b> independently. To Dos appear on their assigned dates, not again on Today just because they are overdue. Gantt task bands use their real inclusive calendar-day spans; milestones use their own date. Project colors match the To Do project tags.</li>
-                    <li><b>Navigation:</b> Switch <b>Month / Week</b>, use the previous/next arrows or <b>Today</b>, or open the sliders for <b>Go to date</b>. Selecting a date opens its complete day agenda. Crowded days offer <b>+N more</b>; long bands continue across week boundaries.</li>
-                    <li><b>Filters:</b> The sliders contain Project / tagged To Dos, Gantt task levels (<b>All</b>, <b>Main</b>, or <b>Actionable</b> tasks without children), and <b>Show completed work</b>. Standalone events are independent of project/completion filters. Calendar display preferences are browser-local, remembered separately per profile, and do not create GitHub commits.</li>
-                    <li><b>Add a To Do:</b> Select its date, then <b>+ To Do</b> in the day agenda; the top <b>+ Add</b> takes you there. The shared editor pre-fills the date and offers text, reminder time, project/task linking and rich-text notes. An unsaved add-item draft in To Do is kept separate. Existing items open the same editor; its <b>Date</b> field moves the item without rescheduling Gantt.</li>
+                    <li><b>Layers:</b> Open <b>Settings</b> beside Today and check <b>To Dos</b>, <b>Projects</b> and <b>Events</b> independently. To Dos appear on their assigned dates, not again on Today just because they are overdue. Gantt task bands use their real inclusive calendar-day spans; milestones use their own date. Project colors match the To Do project tags.</li>
+                    <li><b>Navigation:</b> The single-row toolbar shows the month or week range between previous/next arrows, a <b>Month / Week</b> dropdown and <b>Today</b>. <b>Go to date</b> is in Settings. Selecting a date opens its complete day agenda. Crowded days offer <b>+N more</b>; long bands continue across week boundaries.</li>
+                    <li><b>Settings:</b> The sliders beside Today open a popover with layers, Project / tagged To Dos, Gantt task levels (<b>All</b>, <b>Main</b>, or <b>Actionable</b> tasks without children), and <b>Show completed work</b>. Click outside or press Escape to close it. Standalone events are independent of project/completion filters. Calendar display preferences are browser-local, remembered separately per profile, and do not create GitHub commits.</li>
+                    <li><b>Add a To Do:</b> Select its date, then <b>+ To Do</b> in the day agenda. The shared editor pre-fills the date and offers text, reminder time, project/task linking and rich-text notes. An unsaved add-item draft in To Do is kept separate. Existing items open the same editor; its <b>Date</b> field moves the item without rescheduling Gantt.</li>
                     <li><b>Edit Gantt:</b> Click a task band or its day-agenda entry to edit the actual source task's name, start, calendar duration, milestone status, progress and notes. Parent dates remain derived from subtasks. A parent progress value is a manual override; leave it blank to return to automatic calculation. Linked completion keeps its existing rules and impact messages. Text, notes and dates of copied To Dos remain independent.</li>
                     <li><b>Events:</b> Select a date and <b>+ Event</b> for OOO, a birthday or other schedule information. Set a title, start/end dates (both included), and optional notes. Click an event to edit it; Delete asks for confirmation. Events have no checkbox and never move project dates or change working days.</li>
-                    <li><b>Phones:</b> Month uses finger-sized dates, item counts and thin colored span strips; tap a date for full names and editing in its agenda. Week keeps readable bands and To Dos: swipe its grid sideways to see all seven days. The rest of the page does not scroll sideways. Filters stay collapsed until requested, and rotation preserves open editor text.</li>
+                    <li><b>Phones:</b> The toolbar stays one row with a shortened date label; <b>Month / Week</b> moves into <b>Settings &gt; View</b>. Month uses finger-sized dates, item counts and thin colored span strips; tap a date for full names and editing in its agenda. Week keeps readable bands and To Dos: swipe its grid sideways to see all seven days. The rest of the page does not scroll sideways. Settings scroll internally when needed, and rotation preserves open editor text.</li>
                 </ul>
                 <p class="mb-4">Events are saved with their profile through browser saving, private GitHub sync, enabled local JSON writing, backups/import and Recovery. Pause sync also pauses event uploads, not local saving. Existing task/To Do PDF, image and .ics exports keep their existing scopes; Calendar itself does not add another export service.</p>
                 <p class="mb-6"><b>Update the tracker on other devices/tabs before saving calendar events.</b> Events use protected <b>profile/cache format 3</b>; older apps refuse it rather than silently dropping events. Previously saved projects and To Dos are retained. Replace the website's <b>index.html</b> and reload online on each device; the worker is unchanged. <b>Do not clear site data.</b></p>
@@ -3595,19 +3662,24 @@ function saveCalendarTask() {
             document.body.style.setProperty('--mobile-viewport-height', (viewport ? viewport.height : innerHeight) + 'px');
             document.body.style.setProperty('--mobile-viewport-top', (viewport ? viewport.offsetTop : 0) + 'px');
             document.querySelectorAll('.toolbar-menu[open]').forEach(positionMobileMenu);
+            fitCalendarPeriod();
         }
         function positionMobileMenu(menu) {
             const panel = menu.querySelector(':scope > div');
             if (!panel) return;
             if (!mobileLayout || !menu.open) {
                 ['top', 'left', 'right', 'max-height'].forEach(property => panel.style.removeProperty(property));
+                if (menu.id === 'calendar-settings' && menu.open)
+                    panel.style.maxHeight = Math.max(44, innerHeight - panel.getBoundingClientRect().top - 12) + 'px';
                 return;
             }
             const viewport = window.visualViewport;
             const top = viewport ? viewport.offsetTop : 0;
             const height = viewport ? viewport.height : innerHeight;
-            panel.style.maxHeight = Math.max(44, height - 24) + 'px';
             const anchor = menu.querySelector('summary').getBoundingClientRect();
+            const available = menu.id === 'calendar-settings' ?
+                top + height - Math.max(top + 12, anchor.bottom + 6) - 12 : height - 24;
+            panel.style.maxHeight = Math.max(44, available) + 'px';
             const size = panel.getBoundingClientRect();
             panel.style.right = 'auto';
             panel.style.left = Math.max(12, Math.min(anchor.left, innerWidth - size.width - 12)) + 'px';
