@@ -221,7 +221,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     }
     function freshState(data) {
         const profile = cachedProfile({ schemaVersion: 1, profile: { id: makeId(), name: 'Default' }, data: data || emptyData() });
-        return { schemaVersion: 1, activeProfileId: profile.id, profiles: [profile], manifestKnown: false, pendingDeletions: [], recovery: [] };
+        return { schemaVersion: 1, activeProfileId: profile.id, profiles: [profile], manifestKnown: false, pendingDeletions: [], recovery: [], syncPaused: false };
     }
     function normalizeRecovery(entries) {
         requireValue(Array.isArray(entries), 'Invalid recovery snapshot list.');
@@ -252,9 +252,10 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         const pending = input.pendingDeletions === undefined ? [] : input.pendingDeletions;
         requireValue(Array.isArray(pending) && pending.every(validId) && new Set(pending).size === pending.length &&
             pending.every(id => !ids.has(id)), 'Invalid pending profile deletions.');
+        requireValue(input.syncPaused === undefined || typeof input.syncPaused === 'boolean', 'Invalid browser sync pause setting.');
         return {
             schemaVersion: input.schemaVersion, profiles, activeProfileId: ids.has(input.activeProfileId) ? input.activeProfileId : profiles[0].id,
-            manifestKnown: !!input.manifestKnown, pendingDeletions: pending.slice(),
+            manifestKnown: !!input.manifestKnown, pendingDeletions: pending.slice(), syncPaused: input.syncPaused === true,
             recovery: normalizeRecovery(input.recovery === undefined ? [] : input.recovery)
         };
     }
@@ -494,6 +495,9 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         const binary = atob(value.replace(/\s/g, ''));
         return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(binary, char => char.charCodeAt(0))));
     }
+    class SyncPausedError extends Error {
+        constructor() { super('GitHub sync is paused. Resume it in GitHub settings.'); }
+    }
     class GitHubError extends Error {
         constructor(message, status, retryAt) {
             super(message);
@@ -503,9 +507,10 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     }
     class GitHubClient {
         #token;
-        constructor(config, token) {
+        constructor(config, token, isSyncPaused = () => false) {
             this.config = config ? normalizeConfig(config) : null;
             this.#token = normalizeToken(token); this.cache = new Map(); this.queue = Promise.resolve(); this.lastWrite = 0;
+            this.isSyncPaused = isSyncPaused;
         }
         clearToken() { this.#token = ''; this.cache.clear(); }
         request(suffix, options) {
@@ -520,11 +525,13 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         async performRequest(path, options) {
             requireValue(typeof path === 'string' && path.startsWith('/'), 'GitHub API requests must use an absolute API path, not another host.');
             requireValue(this.#token, 'Reconnect with a GitHub token.');
+            if (this.isSyncPaused()) throw new SyncPausedError();
             if (options.method === 'PUT') {
                 const wait = 1100 - (Date.now() - this.lastWrite);
                 if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
-                this.lastWrite = Date.now();
             }
+            if (this.isSyncPaused()) throw new SyncPausedError();
+            if (options.method === 'PUT') this.lastWrite = Date.now();
             const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20000);
             let response, responseText = '';
             try {
@@ -638,6 +645,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             let label;
             if (this.startupError || this.blocked) label = 'Editing blocked';
             else if (this.storageError) label = 'Local save failed';
+            else if (this.client && this.state.syncPaused) label = 'Sync paused';
             else if (conflicts.length) label = 'Needs attention';
             else if (this.error) label = 'Sync error';
             else if (!this.client) label = this.config ? 'Reconnect GitHub' : 'Saved locally';
@@ -648,7 +656,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             else label = 'Synced';
             return {
                 label, pending: this.pendingCount(), conflicts, connected: !!this.client, config: this.config,
-                error: this.startupError || this.storageError || this.error, blocked: this.blocked
+                error: this.startupError || this.storageError || this.error, blocked: this.blocked, syncPaused: this.state.syncPaused
             };
         }
         emit() { this.onStatus(this.status()); }
@@ -691,7 +699,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             if (!this.ready || this.blocked) return;
             this.pollTimer = setInterval(() => { if (!document.hidden) this.schedule(0); }, 30000);
             this.onFocus = () => { if (!document.hidden) this.schedule(0); };
-            this.onOnline = () => { if (!this.paused) { this.retryAt = 0; this.schedule(0); } this.emit(); };
+            this.onOnline = () => { if (!this.paused && !this.state.syncPaused) { this.retryAt = 0; this.schedule(0); } this.emit(); };
             this.onOffline = () => this.emit();
             window.addEventListener('focus', this.onFocus); document.addEventListener('visibilitychange', this.onFocus);
             window.addEventListener('online', this.onOnline); window.addEventListener('offline', this.onOffline);
@@ -786,7 +794,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         resume(token) {
             this.requireEditable();
             requireValue(this.config && !this.client && !this.running && !this.connecting, 'The saved connection cannot be resumed in the current state.');
-            this.client = new GitHubClient(this.config, token); this.validateBeforeSync = true;
+            this.client = new GitHubClient(this.config, token, () => this.state.syncPaused); this.validateBeforeSync = true;
             this.error = null; this.paused = false; this.retryAt = 0; this.failures = 0;
             this.emit(); this.schedule(0);
         }
@@ -804,7 +812,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 else {
                     const remoteIndex = await client.readFile(INDEX_PATH);
                     const ids = remoteIndex ? normalizeIndex(remoteIndex.value).profiles : [];
-                    state = { schemaVersion: 1, profiles: [], activeProfileId: null, manifestKnown: !!remoteIndex, pendingDeletions: [], recovery: [] };
+                    state = { schemaVersion: 1, profiles: [], activeProfileId: null, manifestKnown: !!remoteIndex, pendingDeletions: [], recovery: [], syncPaused: false };
                     for (const id of ids) {
                         const remote = await client.readFile('profiles/' + id + '.json');
                         requireValue(remote, 'The cloud index references a missing profile: ' + id + '. Restore its file from GitHub history.');
@@ -821,6 +829,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 this.storage.setItem(key, JSON.stringify(state)); this.storage.setItem(CONFIG_KEY, JSON.stringify(config));
                 if (this.client) this.client.clearToken();
                 this.client = client; this.config = config; this.key = key; this.state = state;
+                client.isSyncPaused = () => this.state.syncPaused;
                 this.validateBeforeSync = false;
                 this.refreshSavedValues(); this.error = null; this.paused = false; this.retryAt = 0; this.failures = 0;
                 this.onChange({ reason: 'connection', id: state.activeProfileId });
@@ -835,14 +844,30 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 this.client = null; this.error = null; this.paused = false; this.connecting = false; this.emit();
             }
         }
+        setSyncPaused(paused) {
+            this.requireEditable();
+            requireValue(this.client && this.config, 'Reconnect to GitHub before changing its sync setting.');
+            requireValue(typeof paused === 'boolean', 'Choose whether to pause GitHub sync.');
+            const previous = this.state.syncPaused;
+            if (paused === previous) return;
+            this.state.syncPaused = paused;
+            try { this.persist(); }
+            catch (error) { this.state.syncPaused = previous; this.emit(); throw error; }
+            clearTimeout(this.timer);
+            this.emit();
+            if (!paused) this.schedule(0);
+        }
         schedule(delay) {
             clearTimeout(this.timer);
-            if (!this.ready || this.blocked || !this.client || this.connecting || this.paused) return;
+            if (!this.ready || this.blocked || !this.client || this.connecting || this.paused || this.state.syncPaused) return;
             if (navigator.onLine === false) { this.emit(); return; }
             const wait = Math.max(delay === undefined ? 2000 : delay, this.retryAt - Date.now(), 0);
             this.timer = setTimeout(() => { this.sync().catch(error => this.reportError(error)); }, wait);
         }
-        retry() { this.paused = false; this.retryAt = 0; this.schedule(0); }
+        retry() {
+            if (this.state.syncPaused) { this.emit(); return; }
+            this.paused = false; this.retryAt = 0; this.schedule(0);
+        }
         reportError(error) {
             this.error = error; this.failures++; this.paused = !(error instanceof GitHubError && error.retryable);
             if (!this.paused) {
@@ -853,9 +878,14 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         }
         sync() {
             if (this.running) { this.syncAgain = true; return this.running; }
+            if (this.state.syncPaused) return Promise.resolve({ paused: true });
             if (!this.ready || this.blocked || !this.client || this.connecting || this.paused || navigator.onLine === false || Date.now() < this.retryAt) return Promise.resolve();
             this.running = this.performSync(this.client).then(() => {
+                if (this.state.syncPaused) return { paused: true };
                 this.error = null; this.failures = 0; this.retryAt = 0;
+            }).catch(error => {
+                if (error instanceof SyncPausedError) return { paused: true };
+                throw error;
             }).finally(() => {
                 this.running = null; this.emit();
                 if (this.syncAgain) { this.syncAgain = false; this.schedule(); }
@@ -868,27 +898,33 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 this.validateBeforeSync = false;
             }
             const remoteIndex = await client.readFile(INDEX_PATH);
+            if (this.state.syncPaused) return;
             requireValue(remoteIndex || !this.state.manifestKnown, 'The cloud profile index disappeared. Restore profiles/index.json from GitHub history; local data is preserved.');
             const index = remoteIndex ? normalizeIndex(remoteIndex.value) : { schemaVersion: 1, profiles: [], deletedProfiles: [] };
             const excluded = new Set(index.deletedProfiles.concat(this.state.pendingDeletions));
             requireValue(!this.state.profiles.some(profile => profile.registered && !index.profiles.includes(profile.id) && !excluded.has(profile.id)), 'A profile was removed from the cloud index outside the app. Restore the index from GitHub history before syncing.');
             await this.loadCloudProfiles(client, index);
+            if (this.state.syncPaused) return;
             this.applyCloudDeletions(index.deletedProfiles);
             for (const profile of this.state.profiles.slice()) {
+                if (this.state.syncPaused) return;
                 if (excluded.has(profile.id) || this.state.pendingDeletions.includes(profile.id)) continue;
                 if (this.isDirty(profile) || !profile.registered || profile.id === this.state.activeProfileId || profile.conflict) await this.syncProfile(client, profile);
             }
             const uploaded = this.state.profiles.filter(profile => profile.baseSha && !profile.registered && !excluded.has(profile.id)).map(profile => profile.id);
+            if (this.state.syncPaused) return;
             if (uploaded.length || this.state.pendingDeletions.length || !remoteIndex) await this.registerProfiles(client, uploaded);
             this.state.manifestKnown = true; this.persist();
         }
         async loadCloudProfiles(client, index) {
             const excluded = new Set(index.deletedProfiles.concat(this.state.pendingDeletions));
             for (const id of index.profiles) {
+                if (this.state.syncPaused) return;
                 if (excluded.has(id)) continue;
                 const cached = this.state.profiles.find(profile => profile.id === id);
                 if (cached) { if (cached.baseSha) cached.registered = true; continue; }
                 const remote = await client.readFile('profiles/' + id + '.json');
+                if (this.state.syncPaused) return;
                 requireValue(remote, 'The cloud index references a missing profile: ' + id + '. Restore it from GitHub history.');
                 const profile = cachedProfile(normalizeDocument(remote.value, id), remote.sha, true);
                 this.state.profiles.push(profile); this.savedValues.set(id, stable(documentFor(profile)));
@@ -897,6 +933,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         }
         async syncProfile(client, profile) {
             const path = 'profiles/' + profile.id + '.json', remoteFile = await client.readFile(path);
+            if (this.state.syncPaused) return;
             if (!this.state.profiles.includes(profile) || this.state.pendingDeletions.includes(profile.id)) return;
             const remote = remoteFile ? normalizeDocument(remoteFile.value, profile.id) : null, local = documentFor(profile);
             if (!remote && (profile.baseSha || profile.registered)) {
@@ -948,9 +985,11 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         async registerProfiles(client, ids) {
             for (let attempt = 0; attempt < 3; attempt++) {
                 const latest = await client.readFile(INDEX_PATH);
+                if (this.state.syncPaused) return;
                 requireValue(latest || !this.state.manifestKnown, 'The cloud index was removed during sync. Restore it from GitHub history.');
                 const value = latest ? normalizeIndex(latest.value) : { schemaVersion: 1, profiles: [], deletedProfiles: [] };
                 await this.loadCloudProfiles(client, value);
+                if (this.state.syncPaused) return;
                 const deleted = Array.from(new Set(value.deletedProfiles.concat(this.state.pendingDeletions)));
                 const merged = {
                     schemaVersion: deleted.length || value.schemaVersion === 2 ? 2 : 1,
@@ -1098,7 +1137,7 @@ function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
     if (typeof mobileSidebarOpen !== 'undefined' && mobileSidebarOpen) return true;
     if (onlineFileChoosing || onlineExporting) return true;
-    if (['task-modal', 'todo-edit-modal', 'gantt-todo-modal', 'todo-completion-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
+    if (['task-modal', 'todo-edit-modal', 'gantt-todo-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
@@ -1125,7 +1164,6 @@ function applyOnlineProfile(change) {
     lastSidebarWidth = profile.view.lastSidebarWidth || 256;
     lastTaskPanelWidth = profile.view.lastTaskPanelWidth || 520;
     if (change.reason !== 'remote') {
-        closeTodoCompletionDialog(false, false);
         closeGanttTodoDialog(false);
         closeModal();
         closeTodoEditModal();
@@ -1153,10 +1191,11 @@ function onlineStatusIcon(status) {
         sync: ['M20 7v5h-5M4 17v-5h5', 'M6 7a7 7 0 0 1 11.55-2L20 8M4 16l2.45 3A7 7 0 0 0 18 17'],
         warning: ['m10.3 3.7-8.5 14.7a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z', 'M12 9v4m0 4h.01'],
         offline: ['M3 3 21 21M6 17H5a4 4 0 0 1-.7-7.94M9 4a6.5 6.5 0 0 1 9.42 5.02A4 4 0 0 1 20 16', 'M9 17h7'],
+        pause: ['M9 5v14m6-14v14'],
         cloud: ['M20 16.6A4 4 0 0 0 18.4 9 6.5 6.5 0 0 0 5.8 7.7 4.75 4.75 0 0 0 6 17h12'],
         file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', 'M14 2v6h6m-12 7 3 3 5-6']
     };
-    const name = status.error || status.blocked || status.conflicts.length ? 'warning' :
+    const name = status.label === 'Sync paused' ? 'pause' : status.error || status.blocked || status.conflicts.length ? 'warning' :
         status.label === 'Synced' ? 'synced' : status.label === 'Syncing...' ? 'sync' :
         status.label === 'Offline - saved locally' ? 'offline' : status.config ? 'cloud' : 'file';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1184,8 +1223,7 @@ function renderOnlineToolbar(status) {
     document.body.classList.toggle('online-starting', !onlineStore.ready && !status.blocked);
     document.body.classList.toggle('online-blocked', status.blocked);
     document.body.classList.toggle('online-save-failed', !!onlineStore.storageError);
-    const confirmingCompletion = !document.getElementById('todo-completion-modal').classList.contains('hidden');
-    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError || onlineExporting || confirmingCompletion;
+    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError || onlineExporting;
     document.getElementById('toolbar-profiles').inert = document.getElementById('tracker-shell').inert || onlineFileChoosing;
     document.getElementById('toolbar-project-controls').inert = document.getElementById('tracker-shell').inert;
     ['toolbar-export-profile', 'btn-export-pdf', 'btn-export-img', 'btn-sync'].forEach(id => {
@@ -1206,8 +1244,8 @@ function renderOnlineToolbar(status) {
     select.value = onlineStore.state.activeProfileId;
     select.title = onlineStore.current().name;
     select.disabled = status.blocked || !onlineStore.ready || onlineFileChoosing || onlineExporting;
-    const actionable = status.blocked || status.conflicts.length > 0 ||
-        (typeof mobileLayout !== 'undefined' && mobileLayout && !!status.error);
+    const actionable = status.blocked || (!status.syncPaused && status.conflicts.length > 0) ||
+        (typeof mobileLayout !== 'undefined' && mobileLayout && !!status.error && (!status.syncPaused || !!onlineStore.storageError));
     let badge = document.getElementById('online-status');
     if (badge.tagName !== (actionable ? 'BUTTON' : 'SPAN')) {
         const focused = document.activeElement === badge;
@@ -1224,16 +1262,17 @@ function renderOnlineToolbar(status) {
     badge.replaceChildren(onlineStatusIcon(status), label);
     badge.setAttribute('aria-label', label.textContent);
     badge.className = 'toolbar-action toolbar-status ' +
-        (status.error || status.conflicts.length ? 'toolbar-status-attention' :
+        (status.label === 'Sync paused' ? 'toolbar-status-neutral' : status.error || status.conflicts.length ? 'toolbar-status-attention' :
             status.label === 'Synced' ? 'toolbar-status-synced' : 'toolbar-status-neutral');
-    badge.title = actionable ? 'Click to review the issue.' : 'Save status' +
+    badge.title = actionable ? 'Click to review the issue.' : status.label === 'Sync paused' ?
+        'GitHub sync is paused. Local saving continues. Resume in GitHub settings.' : 'Save status' +
         (status.config ? ': ' + status.config.owner + '/' + status.config.repo + ' - ' + status.config.branch : ': local browser workspace');
     const githubButton = document.getElementById('github-connect-button');
     const githubLabel = document.getElementById('github-connect-label');
     githubLabel.textContent = status.connected ? 'GitHub settings' : 'Connect GitHub';
     githubButton.replaceChildren(githubButton.querySelector('svg'), githubLabel);
     githubButton.setAttribute('aria-label', githubLabel.textContent);
-    document.getElementById('online-retry').classList.toggle('hidden', !status.error || !status.connected || status.blocked);
+    document.getElementById('online-retry').classList.toggle('hidden', !status.error || !status.connected || status.blocked || status.syncPaused);
     document.getElementById('online-recovery-button').classList.toggle('hidden', onlineStore.state.recovery.length === 0);
     const message = document.getElementById('online-message');
     const explanation = status.error ? status.error.message : status.blocked ? 'Editing is blocked. Close other tracker tabs and reload.' :
@@ -1242,9 +1281,10 @@ function renderOnlineToolbar(status) {
     message.textContent = explanation || '';
     message.classList.toggle('hidden', !explanation);
     const conflict = status.conflicts.find(profile => profile.id === onlineStore.state.activeProfileId) || status.conflicts[0];
-    if (conflict && !onlineUiBusy() && !onlineShownConflicts.has(conflict.id + ':' + conflict.conflict.sha)) {
+    if (conflict && !status.syncPaused && !onlineUiBusy() && !onlineShownConflicts.has(conflict.id + ':' + conflict.conflict.sha)) {
         openOnlineConflict(conflict.id);
     }
+    renderOnlineSyncControls(status);
     renderOnlineProfileManager();
     if (typeof refreshMobileUI === 'function') refreshMobileUI();
 }
@@ -1374,6 +1414,33 @@ function openOnlineStatus() {
     else openGitHubModal();
 }
 
+function renderOnlineSyncControls(status) {
+    document.getElementById('github-sync-controls').classList.toggle('hidden', !status.connected);
+    document.getElementById('github-sync-state').textContent = status.syncPaused ? 'GitHub sync paused' : 'Automatic GitHub sync';
+    const button = document.getElementById('github-sync-toggle');
+    button.textContent = status.syncPaused ? 'Resume sync' : 'Pause sync';
+    button.disabled = !status.connected || onlineStore.connecting || status.blocked;
+    document.getElementById('github-sync-description').textContent = status.syncPaused
+        ? 'Your token is kept. Browser and local JSON saving continue. Sync stays paused after reopening, for every profile in this browser.'
+        : 'Pause checks and uploads while planning, without disconnecting. Other devices are unaffected.';
+    document.getElementById('github-submit').textContent = onlineStore.connecting ? 'Connecting...' :
+        status.syncPaused ? 'Connect (keep paused)' : 'Connect & sync';
+}
+
+function toggleOnlineSyncPause() {
+    try {
+        const paused = !onlineStore.state.syncPaused, running = !!onlineStore.running;
+        onlineStore.setSyncPaused(paused);
+        closeGitHubModal();
+        todoPopup(paused ? 'GitHub sync paused' : 'GitHub sync resumed', paused
+            ? 'Your token is kept and local saving continues. GitHub sync stays paused until you resume it in settings.' +
+                (running ? ' Any request already underway will finish safely.' : '')
+            : 'Pending work will be checked against GitHub before uploading. If both versions changed, you can choose which to keep.' +
+                (onlineStore.error ? ' The displayed sync error still needs attention.' : ''),
+            'border-blue-500', { status: true });
+    } catch (error) { showOnlineError(error); }
+}
+
 function openGitHubModal() {
     if (!onlineStore.ready || onlineStore.blocked) {
         alert(onlineStore.status().error?.message || 'The browser workspace is still starting. Please wait.');
@@ -1389,10 +1456,11 @@ function openGitHubModal() {
     document.getElementById('github-modal-error').classList.add('hidden');
     document.getElementById('github-disconnect').classList.toggle('hidden', !onlineStore.client && !onlineStore.config);
     document.getElementById('github-connection-description').textContent = onlineStore.client
-        ? 'Connected to ' + onlineStore.config.owner + '/' + onlineStore.config.repo + '. Enter a replacement token below, or disconnect.'
+        ? 'Connected to ' + onlineStore.config.owner + '/' + onlineStore.config.repo + '. Manage sync below, replace your token, or disconnect.'
         : 'Paste your token. Your private repository is detected automatically.';
+    renderOnlineSyncControls(onlineStore.status());
     document.getElementById('github-modal').classList.remove('hidden');
-    document.getElementById('github-token').focus();
+    document.getElementById(onlineStore.client ? 'github-sync-toggle' : 'github-token').focus({ preventScroll: true });
 }
 
 function closeGitHubModal() {
@@ -1421,7 +1489,7 @@ async function connectOnlineGitHub(event) {
     } catch (error) {
         console.error('GitHub connection:', error.message);
         errorBox.textContent = error.message; errorBox.classList.remove('hidden');
-    } finally { token = ''; fields.disabled = false; submit.textContent = 'Connect & sync'; }
+    } finally { token = ''; fields.disabled = false; renderOnlineSyncControls(onlineStore.status()); }
 }
 
 async function disconnectOnlineGitHub() {
@@ -1970,7 +2038,6 @@ async function startOnlineTracker() {
         #mobile-actions-modal { z-index: 106; }
         #mobile-toolbar-modal { z-index: 90; }
         #gantt-todo-modal { z-index: 107; }
-        #todo-completion-modal { z-index: 115; }
         .todo-task-select { width: 100%; min-width: 0; max-width: 100%; }
         .todo-new-link-row { flex-basis: 100%; min-width: 0; }
         .todo-new-link-row.hidden { display: none; }
@@ -2126,8 +2193,6 @@ async function startOnlineTracker() {
         .mobile-layout [id$="-modal"] input:not([type="checkbox"]), .mobile-layout [id$="-modal"] textarea,
         .mobile-layout [id$="-modal"] select, .mobile-layout [contenteditable="true"] { font-size: 16px; }
         .mobile-layout [id$="-modal"] button { min-width: 44px; min-height: 44px; }
-        .mobile-layout #todo-completion-modal { padding: 16px; }
-        .mobile-layout #todo-completion-modal > div { height: auto; border-radius: 12px; }
         .mobile-layout #help-modal .help-content { padding: 16px; min-height: 0; }
         .mobile-layout .help-storage-table { display: block; overflow-x: auto; }
         .mobile-layout #help-modal h3 { font-size: 16px; white-space: normal; }
@@ -2427,7 +2492,8 @@ async function startOnlineTracker() {
                 <ul class="mb-6">
                     <li><b>Profiles:</b> Use the dropdown to switch workspaces and the people icon to Add, Use, Rename or Delete. Profiles are not logins: a token with access to the private repository can access all its profiles.</li>
                     <li><b>GitHub connection:</b> Paste a fine-grained token limited to one private data repository with Contents: read/write. GitHub identifies its account and repository; your website can be hosted by a different account. Each browser needs its own first connection, then remembers the token until Disconnect.</li>
-                    <li><b>Automatic checks:</b> Uploads normally start about two seconds after editing stops. Checks also run on reopening, returning to the tab, reconnecting and every 30 seconds while visible. New profiles are discovered; existing clean inactive profiles refresh when selected. This is not instantaneous live collaboration.</li>
+                    <li><b>Automatic checks:</b> Unless paused, uploads normally start about two seconds after editing stops. Checks also run on reopening, returning to the tab, reconnecting and every 30 seconds while visible. New profiles are discovered; existing clean inactive profiles refresh when selected. This is not instantaneous live collaboration.</li>
+                    <li><b>Pause sync:</b> Open <b>GitHub settings &gt; Pause sync</b> to stop automatic checks and uploads without forgetting the token. Browser saving and enabled local JSON writing continue. The pause applies to all profiles on this browser's connection, survives closing/reloading, and does not pause other devices. A request already underway finishes safely, but queued requests wait. Use <b>Resume sync</b> in the same settings to check GitHub before uploading: unchanged cloud data needs no choice; divergent edits still use the normal conflict choices. Existing rate-limit waits and sync errors are not bypassed by Resume.</li>
                     <li><b>Another device:</b> An unchanged cached profile accepts newer cloud data automatically. If only this device changed, it uploads. If both sides changed into different versions, <b>Needs attention</b> asks what to keep; saved offline work is not silently discarded. Checks use the last-synced version, not whichever device opened last.</li>
                     <li><b>Conflict choices:</b> <b>Keep this device's version</b> uploads this copy and snapshots the previous GitHub version locally. <b>Use GitHub's version</b> snapshots this copy locally before loading the cloud version. <b>Keep both</b> keeps the cloud original and makes a separate recovered-local profile. Conflicts are per whole profile, not automatically merged task by task.</li>
                     <li><b>Busy editors:</b> Incoming replacements wait while an editor, dialog, file chooser or drag is active. <b>Cloud update waiting</b> is not an error. Finishing a local edit may require a conflict choice if GitHub also changed.</li>
@@ -2540,20 +2606,20 @@ async function startOnlineTracker() {
                 <ul>
                     <li><b>Link a manual item:</b> Select a Project, then the optional <b>Gantt task</b> when adding an item. Or open <b>Edit Item</b> to add, change or remove its task link. A project tag alone never changes Gantt progress. New linked items start with the task's current completion. When linking an existing item with a different completion state, explicitly choose <b>Keep Gantt</b> or <b>Use this To Do</b>; nothing is changed until saved.</li>
                     <li><b>Completion:</b> Completing a linked To Do sets its source task to 100%. Setting Gantt progress to 100% completes every To Do currently linked to that task, on every date in this profile. Lowering its progress reopens those linked copies. Copied names, notes and dates remain independent. If subtask progress automatically completes or reopens a parent, an in-app message names the affected parents and counts their linked To Dos.</li>
-                    <li><b>Uncheck:</b> Restore the source task's <b>previous percentage</b>, or 0% if no earlier percentage was recorded. Only that task reopens; its descendants keep their current progress. Parents use a manual override so restored progress is not immediately replaced by their children. Parent reopening asks for confirmation.</li>
+                    <li><b>Uncheck:</b> Immediately restore the source task's <b>previous percentage</b>, or 0% if no earlier percentage was recorded. Only that task reopens; its descendants keep their current progress. Parents use a manual override so restored progress is not immediately replaced by their children. An in-app message explains the restored progress; no completion/reopening confirmation is needed.</li>
                     <li><b>Unlink:</b> Choose <b>No task link</b> and save. This stops future completion updates without undoing previous Gantt progress or changing the To Do's current completion. Changing a linked item's project also requires removing its old task link. Deleting a To Do never deletes or reopens its Gantt task.</li>
                     <li><b>Delete a Gantt task/project:</b> The confirmation counts the linked To Dos that will be kept and unlinked. Their text, notes, dates and completion are retained. Links are profile-local and use task identity, not matching names.</li>
                 </ul>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Completing a Linked Parent</h3>
-                <p class="mb-2">A parent checkbox always opens the tracker's own confirmation dialog, not a browser popup. It shows the impact before anything is changed; use <b>Cancel</b> or <b>Esc</b> to leave progress unchanged. Coverage counts <b>all nesting levels</b> and currently linked To Dos on <b>any date in this profile</b>, including completed copies:</p>
+                <p class="mb-2">Completing or reopening a linked parent happens <b>immediately, without confirmation</b>, from its checkbox, a reminder or a saved Edit. A non-blocking <b>Progress updated</b> message reports what changed and what was left unchanged. Coverage counts <b>all nesting levels</b> and currently linked To Dos on <b>any date in this profile</b>, including completed copies:</p>
                 <table class="help-storage-table">
-                    <thead><tr><th>Linked descendants</th><th>Confirmed action</th></tr></thead>
+                    <thead><tr><th>Linked descendants</th><th>Immediate action</th></tr></thead>
                     <tbody>
-                        <tr><td><b>None or some</b></td><td>Override only the parent to 100% using manual progress. The dialog states how many descendants <b>will remain unchanged</b>; their progress and linked To Dos are not completed by this action.</td></tr>
-                        <tr><td><b>All descendants</b></td><td>Complete the parent and its entire descendant branch to 100%, including their linked To Dos on every date. The dialog distinguishes descendants <b>newly completed</b> from those <b>already complete</b>.</td></tr>
+                        <tr><td><b>None or some</b></td><td>Override only the parent to 100% using manual progress. The message counts descendants that <b>remain unchanged</b>, including those already complete; their progress and linked To Dos are not completed by this action.</td></tr>
+                        <tr><td><b>All descendants</b></td><td>Complete the parent and its entire descendant branch to 100%, including their linked To Dos on every date. The message distinguishes descendants <b>newly completed</b> from those <b>already complete</b>.</td></tr>
                     </tbody>
                 </table>
-                <p class="mb-4">Normal automatic ancestors can recalculate from changed child progress. A manual parent override stays in effect until you clear that parent's percentage in Gantt to return to automatic calculation. Unchecking a parent does not undo a previous whole-branch completion.</p>
+                <p class="mb-4">Normal automatic ancestors can recalculate from changed child progress. A manual parent override stays in effect until you clear that parent's percentage in Gantt to return to automatic calculation. Unchecking a parent does not undo a previous whole-branch completion. Deletion/replacement confirmations and real choices about conflicting versions or link completion remain unchanged.</p>
                 <p class="mb-4"><b>Update the tracker on other devices/tabs before using task links or To Do notes.</b> These and remembered completion percentages use profile/cache format 2, preserved by GitHub, JSON writing, backups and Recovery. Older apps refuse the newer format rather than silently dropping links. Reload the updated application online; <b>do not clear site data</b>. No additional service or login is needed.</p>
                 <p class="mb-4"><b>Export:</b> In To Do view, use <b>Backups &gt; Export PDF report</b> or <b>Backups &gt; Export image</b>, below the same separator used for project exports. Both include the selected day and the Overdue section, with completed items, reminder times, project/task labels and saved notes, but without editing controls or navigation. This is not an all-dates export; unsaved add-item text is not included. Calendar .ics exports below remain available.</p>
                 <h3 class="text-lg font-bold text-white mb-2">Adding &amp; Completing Items</h3>
@@ -2686,22 +2752,19 @@ async function startOnlineTracker() {
         </form>
     </div>
     <!-- Reminder Toasts -->
-    <div id="todo-completion-modal" onclick="if(event.target===this) closeTodoCompletionDialog()" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4">
-        <div class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6" role="alertdialog" aria-modal="true" aria-labelledby="todo-completion-title" aria-describedby="todo-completion-message">
-            <h2 id="todo-completion-title" class="text-xl font-bold mb-4"></h2>
-            <p id="todo-completion-message" class="text-sm text-gray-200 whitespace-pre-line"></p>
-            <div class="flex justify-end gap-2 mt-6">
-                <button id="todo-completion-cancel" onclick="closeTodoCompletionDialog()" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cancel</button>
-                <button id="todo-completion-confirm" onclick="closeTodoCompletionDialog(true)" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-semibold"></button>
-            </div>
-        </div>
-    </div>
     <div id="todo-toast-wrap" class="fixed bottom-4 right-4 z-[110] flex flex-col items-end"></div>
     <div id="github-modal" class="hidden fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4">
         <form onsubmit="connectOnlineGitHub(event)" class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6">
-            <h2 class="text-xl font-bold mb-2">Connect GitHub</h2>
+            <h2 class="text-xl font-bold mb-2">GitHub settings</h2>
             <p id="github-connection-description" class="text-sm text-gray-400 mb-5">Paste your token. Your private repository is detected automatically.</p>
             <fieldset id="github-fields" class="flex flex-col gap-4">
+                <div id="github-sync-controls" class="hidden bg-gray-900 border border-gray-700 rounded p-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <span id="github-sync-state" class="text-sm font-semibold"></span>
+                        <button id="github-sync-toggle" type="button" onclick="toggleOnlineSyncPause()" aria-describedby="github-sync-description" class="shrink-0 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm"></button>
+                    </div>
+                    <p id="github-sync-description" class="text-xs text-gray-400 mt-2"></p>
+                </div>
                 <label class="text-xs text-gray-300 font-semibold">GitHub token
                     <input id="github-token" type="password" required autocomplete="off" spellcheck="false" placeholder="github_pat_..." class="block mt-1 w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white">
                 </label>
@@ -3860,7 +3923,6 @@ async function startOnlineTracker() {
         let todoEditRef = null;
         let ganttTodoProjectId = null;
         let ganttTodoReturnFocus = null;
-        let todoCompletionRequest = null;
         let todoBaseTitle = 'Project Tracker';
         let todoFlashTimer = null;
         let todoFlashOn = false;
@@ -4037,8 +4099,8 @@ async function startOnlineTracker() {
             todoClosePopup(btn);
             saveTodos();
         }
-        async function completeFromReminder(dateStr, id, btn) {
-            if (await changeTodoCompletion(dateStr, id, true)) todoClosePopup(btn);
+        function completeFromReminder(dateStr, id, btn) {
+            if (changeTodoCompletion(dateStr, id, true)) todoClosePopup(btn);
         }
         function todoIcsEsc(s) {
             return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
@@ -4242,67 +4304,8 @@ async function startOnlineTracker() {
                 item?.taskId ? 'Saving without a task link stops completion updates. Existing Gantt progress is not undone.' :
                     'A project tag alone does not change Gantt progress. Choose a task to share completion.';
         }
-        function todoCompletionStamp() {
-            return JSON.stringify([onlineStore.current().id, data.tasks, Object.entries(data.todos || {}).flatMap(([date, items]) =>
-                items.map(item => [date, item.id, item.projectId, item.taskId, item.done]))]);
-        }
-        function closeTodoCompletionDialog(confirmed = false, restoreFocus = true) {
-            const request = todoCompletionRequest;
-            todoCompletionRequest = null;
-            document.getElementById('todo-completion-modal').classList.add('hidden');
-            if (!request) return;
-            for (const [element, inert] of request.backgrounds) element.inert = inert;
-            renderOnlineToolbar(onlineStore.status());
-            const focus = request.focus?.isConnected ? request.focus : request.todoId ?
-                document.querySelector('[data-todo-id="' + request.todoId + '"] input[type="checkbox"]') : null;
-            if (restoreFocus && focus?.getClientRects().length) focus.focus({ preventScroll: true });
-            request.resolve(confirmed);
-        }
-        async function confirmTodoCompletion(nextData, item, done) {
-            const plan = TrackerOnline.todoCompletionPlan(nextData, item);
-            if (!plan || !plan.descendants.length) return true;
-            if (todoCompletionRequest) throw new Error('Finish the current completion confirmation first.');
-            const count = plan.descendants.length;
-            let message, title, action;
-            if (!done) {
-                title = 'Reopen linked parent?'; action = 'Reopen parent';
-                message = 'Reopen "' + plan.task.name + '" at ' + (plan.task.previousProgress ?? 0) +
-                    '% using a manual override?\n\n' + count +
-                    ' descendants will remain unchanged. Other To Dos linked to this parent will reopen too.';
-            } else if (plan.completeBranch) {
-                title = 'Complete parent and subtasks?'; action = 'Complete branch';
-                message = 'Complete "' + plan.task.name + '" and its entire descendant branch to 100%?\n\n' +
-                    'All ' + count + ' descendants have linked To Dos somewhere in this profile.\n' +
-                    plan.newlyCompleted + ' descendants will be newly completed; ' + plan.alreadyComplete + ' are already complete.\n' +
-                    'Their linked To Dos, on every date, will also be completed. Unchecking the parent later reopens only the parent, not the children.';
-            } else {
-                title = 'Complete linked parent?'; action = 'Complete parent';
-                message = 'Override "' + plan.task.name + '" to 100% using manual progress?\n\n' +
-                    plan.linkedCount + ' of ' + count + ' descendants have linked To Dos in this profile.\n' +
-                    count + ' descendants will remain unchanged (' + plan.alreadyComplete + ' already complete).\n' +
-                    'Their To Dos will not be completed. Clear the parent percentage in Gantt to return to automatic progress.';
-            }
-            const modal = document.getElementById('todo-completion-modal'), stamp = todoCompletionStamp();
-            document.getElementById('todo-completion-title').textContent = title;
-            document.getElementById('todo-completion-message').textContent = message;
-            document.getElementById('todo-completion-confirm').textContent = action;
-            const confirmed = await new Promise(resolve => {
-                const backgrounds = Array.from(document.body.children).filter(element => element !== modal &&
-                    !element.contains(modal) && element.tagName !== 'SCRIPT').map(element => [element, element.inert]);
-                const focus = document.activeElement;
-                todoCompletionRequest = { resolve, backgrounds, focus, todoId: focus.closest('[data-todo-id]')?.dataset.todoId };
-                for (const [element] of backgrounds) element.inert = true;
-                modal.classList.remove('hidden');
-                document.getElementById('todo-completion-cancel').focus({ preventScroll: true });
-            });
-            if (confirmed && stamp !== todoCompletionStamp()) {
-                throw new Error('Task progress or links changed while this confirmation was open. Review the task and try again.');
-            }
-            return confirmed;
-        }
-        function notifyLinkedProgress(automaticParents, reopenedTask = null) {
-            const messages = [];
-            if (reopenedTask) messages.push('Reopened "' + reopenedTask.name + '" at ' + reopenedTask.progress + '%.');
+        function notifyLinkedProgress(automaticParents, message = '') {
+            const messages = message ? [message] : [];
             for (const done of [true, false]) {
                 const parents = automaticParents.filter(parent => parent.done === done);
                 if (!parents.length) continue;
@@ -4316,19 +4319,32 @@ async function startOnlineTracker() {
             }
             if (messages.length) todoPopup('Progress updated', messages.join('\n\n'), 'border-blue-500', { pre: true, status: true });
         }
-        async function changeTodoCompletion(dateStr, id, done, control) {
+        function notifyTodoCompletion(plan, done) {
+            if (!plan) return;
+            const count = plan.descendants.length;
+            let message = '';
+            if (!done) {
+                message = 'Reopened "' + plan.task.name + '" at ' + plan.task.progress + '%.' +
+                    (count ? '\n\nManual parent override. All ' + count + ' descendants remain unchanged. Other To Dos linked to this parent reopened too.' : '');
+            } else if (count && plan.completeBranch) {
+                message = 'Completed "' + plan.task.name + '" and all ' + count + ' descendants to 100%.\n\n' +
+                    plan.newlyCompleted + ' descendants newly completed; ' + plan.alreadyComplete + ' already complete. Their linked To Dos were updated on every date.';
+            } else if (count) {
+                message = 'Set "' + plan.task.name + '" to 100% using manual progress.\n\n' +
+                    plan.linkedCount + ' of ' + count + ' descendants have linked To Dos. All ' + count +
+                    ' descendants remain unchanged (' + plan.alreadyComplete + ' already complete). Their To Dos were left unchanged.';
+            }
+            notifyLinkedProgress(plan.automaticParents, message);
+        }
+        function changeTodoCompletion(dateStr, id, done, control) {
             try {
-                const current = (data.todos[dateStr] || []).find(todo => todo.id === id);
-                if (!current) throw new Error('This To Do no longer exists.');
-                if (current.done === done) return true;
-                if (!await confirmTodoCompletion(data, current, done)) return false;
                 const item = (data.todos[dateStr] || []).find(todo => todo.id === id);
                 if (!item) throw new Error('This To Do no longer exists.');
+                if (item.done === done) return true;
                 const plan = TrackerOnline.setTodoCompletion(data, item, done);
                 const saved = saveTodos();
                 if (saved && activeProjectId !== 'todo') render();
-                if (saved && plan) notifyLinkedProgress(plan.automaticParents,
-                    !done && !plan.descendants.length ? plan.task : null);
+                if (saved) notifyTodoCompletion(plan, done);
                 if (saved && control) document.querySelector('[data-todo-id="' + id + '"] input[type="checkbox"]')?.focus({ preventScroll: true });
                 return saved;
             } catch (error) { showOnlineError(error); return false; }
@@ -4451,21 +4467,19 @@ async function startOnlineTracker() {
             }
             return { next, item, completion };
         }
-        async function saveTodoEdit() {
+        function saveTodoEdit() {
             const errorBox = document.getElementById('todo-edit-error');
             errorBox.classList.add('hidden');
             try {
-                let staged = stageTodoEdit(), plan = null;
+                const staged = stageTodoEdit();
+                let plan = null;
                 if (staged.completion !== null) {
-                    if (!await confirmTodoCompletion(staged.next, staged.item, staged.completion)) return;
-                    staged = stageTodoEdit();
                     plan = TrackerOnline.setTodoCompletion(staged.next, staged.item, staged.completion);
                 }
                 data = TrackerOnline.normalizeData(staged.next);
                 if (saveTodos()) {
                     closeTodoEditModal();
-                    if (plan) notifyLinkedProgress(plan.automaticParents,
-                        !staged.completion && !plan.descendants.length ? plan.task : null);
+                    notifyTodoCompletion(plan, staged.completion);
                 }
             } catch (error) {
                 console.error('To Do edit:', error.message);
@@ -5535,11 +5549,7 @@ async function startOnlineTracker() {
             const actions = document.getElementById('mobile-actions-modal');
             const copy = document.getElementById('gantt-todo-modal');
             const todoEdit = document.getElementById('todo-edit-modal');
-            const completion = document.getElementById('todo-completion-modal');
-            if (!completion.classList.contains('hidden')) {
-                trapMobileFocus(event, completion);
-                if (event.key === 'Escape') { event.preventDefault(); closeTodoCompletionDialog(); }
-            } else if (!copy.classList.contains('hidden')) {
+            if (!copy.classList.contains('hidden')) {
                 trapMobileFocus(event, copy);
                 if (event.key === 'Escape') { event.preventDefault(); closeGanttTodoDialog(); }
             } else if (!todoEdit.classList.contains('hidden')) {
