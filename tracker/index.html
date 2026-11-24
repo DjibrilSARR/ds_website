@@ -346,7 +346,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     }
     function recalculateProject(data, projectId) {
         const tasks = data.tasks[projectId];
-        if (!tasks) return;
+        const automaticParents = [];
+        if (!tasks) return automaticParents;
         for (let index = tasks.length - 1; index >= 0; index--) {
             const task = tasks[index], indent = task.indent || 0;
             task.isParent = index + 1 < tasks.length && (tasks[index + 1].indent || 0) > indent;
@@ -360,9 +361,16 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
                 progress += tasks[child].progress || 0; count++;
             }
             if (minStart !== Infinity) { task.startDay = minStart; task.duration = maxEnd - minStart; }
-            if (!task.isManualProgress) setTaskProgress(task, count ? Math.round(progress / count) : 0, false);
+            if (!task.isManualProgress) {
+                const wasDone = task.progress === 100;
+                setTaskProgress(task, count ? Math.round(progress / count) : 0, false);
+                if (wasDone !== (task.progress === 100)) automaticParents.push({
+                    projectId, id: task.id, name: task.name, done: task.progress === 100, progress: task.progress
+                });
+            }
             else task.progressSymbol = '\u00a4';
         }
+        return automaticParents;
     }
     function syncLinkedTodos(data) {
         for (const items of Object.values(data.todos || {})) for (const item of items) {
@@ -396,7 +404,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         } else {
             setTaskProgress(task, task.previousProgress === undefined ? 0 : task.previousProgress);
         }
-        recalculateProject(data, item.projectId);
+        plan.automaticParents = recalculateProject(data, item.projectId);
         syncLinkedTodos(data);
         return plan;
     }
@@ -1090,7 +1098,7 @@ function onlineUiBusy(id) {
     if (id && id !== onlineStore.state.activeProfileId) return false;
     if (typeof mobileSidebarOpen !== 'undefined' && mobileSidebarOpen) return true;
     if (onlineFileChoosing || onlineExporting) return true;
-    if (['task-modal', 'todo-edit-modal', 'gantt-todo-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
+    if (['task-modal', 'todo-edit-modal', 'gantt-todo-modal', 'todo-completion-modal', 'github-modal', 'cloud-conflict-modal', 'online-recovery-modal', 'profile-manager-modal', 'profile-import-modal', 'mobile-actions-modal', 'mobile-toolbar-modal']
         .some(name => {
             const modal = document.getElementById(name);
             return modal && !modal.classList.contains('hidden');
@@ -1117,6 +1125,7 @@ function applyOnlineProfile(change) {
     lastSidebarWidth = profile.view.lastSidebarWidth || 256;
     lastTaskPanelWidth = profile.view.lastTaskPanelWidth || 520;
     if (change.reason !== 'remote') {
+        closeTodoCompletionDialog(false, false);
         closeGanttTodoDialog(false);
         closeModal();
         closeTodoEditModal();
@@ -1175,7 +1184,8 @@ function renderOnlineToolbar(status) {
     document.body.classList.toggle('online-starting', !onlineStore.ready && !status.blocked);
     document.body.classList.toggle('online-blocked', status.blocked);
     document.body.classList.toggle('online-save-failed', !!onlineStore.storageError);
-    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError || onlineExporting;
+    const confirmingCompletion = !document.getElementById('todo-completion-modal').classList.contains('hidden');
+    document.getElementById('tracker-shell').inert = !onlineStore.ready || status.blocked || !!onlineStore.storageError || onlineExporting || confirmingCompletion;
     document.getElementById('toolbar-profiles').inert = document.getElementById('tracker-shell').inert || onlineFileChoosing;
     document.getElementById('toolbar-project-controls').inert = document.getElementById('tracker-shell').inert;
     ['toolbar-export-profile', 'btn-export-pdf', 'btn-export-img', 'btn-sync'].forEach(id => {
@@ -1960,10 +1970,10 @@ async function startOnlineTracker() {
         #mobile-actions-modal { z-index: 106; }
         #mobile-toolbar-modal { z-index: 90; }
         #gantt-todo-modal { z-index: 107; }
+        #todo-completion-modal { z-index: 115; }
         .todo-task-select { width: 100%; min-width: 0; max-width: 100%; }
         .todo-new-link-row { flex-basis: 100%; min-width: 0; }
         .todo-new-link-row.hidden { display: none; }
-        .todo-task-badge { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #93c5fd; font-size: 11px; }
         #todo-edit-notes { min-height: 100px; max-height: 180px; overflow-y: auto; }
         .mobile-toolbar-content { display: flex; flex-direction: column; gap: 12px; }
         .mobile-toolbar-content.hidden { display: none; }
@@ -2116,6 +2126,8 @@ async function startOnlineTracker() {
         .mobile-layout [id$="-modal"] input:not([type="checkbox"]), .mobile-layout [id$="-modal"] textarea,
         .mobile-layout [id$="-modal"] select, .mobile-layout [contenteditable="true"] { font-size: 16px; }
         .mobile-layout [id$="-modal"] button { min-width: 44px; min-height: 44px; }
+        .mobile-layout #todo-completion-modal { padding: 16px; }
+        .mobile-layout #todo-completion-modal > div { height: auto; border-radius: 12px; }
         .mobile-layout #help-modal .help-content { padding: 16px; min-height: 0; }
         .mobile-layout .help-storage-table { display: block; overflow-x: auto; }
         .mobile-layout #help-modal h3 { font-size: 16px; white-space: normal; }
@@ -2527,13 +2539,13 @@ async function startOnlineTracker() {
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Task Links and Shared Completion</h3>
                 <ul>
                     <li><b>Link a manual item:</b> Select a Project, then the optional <b>Gantt task</b> when adding an item. Or open <b>Edit Item</b> to add, change or remove its task link. A project tag alone never changes Gantt progress. New linked items start with the task's current completion. When linking an existing item with a different completion state, explicitly choose <b>Keep Gantt</b> or <b>Use this To Do</b>; nothing is changed until saved.</li>
-                    <li><b>Completion:</b> Completing a linked To Do sets its source task to 100%. Setting Gantt progress to 100% completes every To Do currently linked to that task, on every date in this profile. Lowering its progress reopens those linked copies. Copied names, notes and dates remain independent.</li>
+                    <li><b>Completion:</b> Completing a linked To Do sets its source task to 100%. Setting Gantt progress to 100% completes every To Do currently linked to that task, on every date in this profile. Lowering its progress reopens those linked copies. Copied names, notes and dates remain independent. If subtask progress automatically completes or reopens a parent, an in-app message names the affected parents and counts their linked To Dos.</li>
                     <li><b>Uncheck:</b> Restore the source task's <b>previous percentage</b>, or 0% if no earlier percentage was recorded. Only that task reopens; its descendants keep their current progress. Parents use a manual override so restored progress is not immediately replaced by their children. Parent reopening asks for confirmation.</li>
                     <li><b>Unlink:</b> Choose <b>No task link</b> and save. This stops future completion updates without undoing previous Gantt progress or changing the To Do's current completion. Changing a linked item's project also requires removing its old task link. Deleting a To Do never deletes or reopens its Gantt task.</li>
                     <li><b>Delete a Gantt task/project:</b> The confirmation counts the linked To Dos that will be kept and unlinked. Their text, notes, dates and completion are retained. Links are profile-local and use task identity, not matching names.</li>
                 </ul>
                 <h3 class="text-lg font-bold text-white mb-2 mt-6">Completing a Linked Parent</h3>
-                <p class="mb-2">A parent checkbox always asks for confirmation. Coverage counts <b>all nesting levels</b> and currently linked To Dos on <b>any date in this profile</b>, including completed copies:</p>
+                <p class="mb-2">A parent checkbox always opens the tracker's own confirmation dialog, not a browser popup. It shows the impact before anything is changed; use <b>Cancel</b> or <b>Esc</b> to leave progress unchanged. Coverage counts <b>all nesting levels</b> and currently linked To Dos on <b>any date in this profile</b>, including completed copies:</p>
                 <table class="help-storage-table">
                     <thead><tr><th>Linked descendants</th><th>Confirmed action</th></tr></thead>
                     <tbody>
@@ -2587,7 +2599,7 @@ async function startOnlineTracker() {
                     <li>Optionally tag an item to a project using the dropdown next to the add box.</li>
                     <li>Every item also carries its own <b>tag dropdown</b>, revealed when you hover the row, so you can change or remove the project at any time—including on items that were created without one. Once set, the project shows as a small colored badge on the right.</li>
                     <li>When an item is tagged, an <b>open icon</b> appears on hover next to the tag to jump straight to that project.</li>
-                    <li>Tagging is entirely optional—leave it on "No project" for general items. A specific task link is optional too; the <b>Linked:</b> badge identifies items that share completion.</li>
+                    <li>Tagging is entirely optional—leave it on "No project" for general items. A specific task link is optional too. To keep the checklist uncluttered, no separate linked-task label is displayed. Hover the <b>project tag</b> for the linked task and its progress, or open <b>Edit Item</b> to inspect, change or remove the link. On touch screens, use Edit Item.</li>
                 </ul>
                 <p class="mb-4">To Do items are saved with everything else—they are included in your LocalStorage, Live Auto-Save file, and JSON backups automatically.</p>
                 <h2 class="text-2xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">7. Application Updates and Offline Access</h2>
@@ -2674,6 +2686,16 @@ async function startOnlineTracker() {
         </form>
     </div>
     <!-- Reminder Toasts -->
+    <div id="todo-completion-modal" onclick="if(event.target===this) closeTodoCompletionDialog()" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4">
+        <div class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6" role="alertdialog" aria-modal="true" aria-labelledby="todo-completion-title" aria-describedby="todo-completion-message">
+            <h2 id="todo-completion-title" class="text-xl font-bold mb-4"></h2>
+            <p id="todo-completion-message" class="text-sm text-gray-200 whitespace-pre-line"></p>
+            <div class="flex justify-end gap-2 mt-6">
+                <button id="todo-completion-cancel" onclick="closeTodoCompletionDialog()" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cancel</button>
+                <button id="todo-completion-confirm" onclick="closeTodoCompletionDialog(true)" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-semibold"></button>
+            </div>
+        </div>
+    </div>
     <div id="todo-toast-wrap" class="fixed bottom-4 right-4 z-[110] flex flex-col items-end"></div>
     <div id="github-modal" class="hidden fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4">
         <form onsubmit="connectOnlineGitHub(event)" class="online-modal bg-gray-800 border border-gray-600 rounded-xl shadow-2xl w-full max-w-xl p-6">
@@ -3594,13 +3616,14 @@ async function startOnlineTracker() {
             const proj = data.projects.find(p => p.id === activeProjectId);
             if (proj && newDate) { proj.startDate = newDate; updateDataAndRender(); }
         }
-        function updateDataAndRender() {
-            TrackerOnline.recalculateProject(data, activeProjectId);
+        function updateDataAndRender(notifyParents = false) {
+            const automaticParents = TrackerOnline.recalculateProject(data, activeProjectId);
             TrackerOnline.syncLinkedTodos(data);
             
             if (!persistOnlineData()) { render(); return; }
             syncToFile();
             render();
+            if (notifyParents === true) notifyLinkedProgress(automaticParents);
         }
         function generateId() { return Math.random().toString(36).substr(2, 9); }
         function addProject() {
@@ -3710,7 +3733,7 @@ async function startOnlineTracker() {
                 const num = parseInt(val);
                 if (!isNaN(num)) TrackerOnline.setTaskProgress(task, Math.min(100, Math.max(0, num)));
             }
-            updateDataAndRender();
+            updateDataAndRender(true);
         }
         function changeIndent(index, delta) {
             if (activeProjectId === 'overview') return;
@@ -3837,6 +3860,7 @@ async function startOnlineTracker() {
         let todoEditRef = null;
         let ganttTodoProjectId = null;
         let ganttTodoReturnFocus = null;
+        let todoCompletionRequest = null;
         let todoBaseTitle = 'Project Tracker';
         let todoFlashTimer = null;
         let todoFlashOn = false;
@@ -4013,8 +4037,8 @@ async function startOnlineTracker() {
             todoClosePopup(btn);
             saveTodos();
         }
-        function completeFromReminder(dateStr, id, btn) {
-            if (changeTodoCompletion(dateStr, id, true)) todoClosePopup(btn);
+        async function completeFromReminder(dateStr, id, btn) {
+            if (await changeTodoCompletion(dateStr, id, true)) todoClosePopup(btn);
         }
         function todoIcsEsc(s) {
             return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
@@ -4218,31 +4242,94 @@ async function startOnlineTracker() {
                 item?.taskId ? 'Saving without a task link stops completion updates. Existing Gantt progress is not undone.' :
                     'A project tag alone does not change Gantt progress. Choose a task to share completion.';
         }
-        function confirmTodoCompletion(nextData, item, done) {
+        function todoCompletionStamp() {
+            return JSON.stringify([onlineStore.current().id, data.tasks, Object.entries(data.todos || {}).flatMap(([date, items]) =>
+                items.map(item => [date, item.id, item.projectId, item.taskId, item.done]))]);
+        }
+        function closeTodoCompletionDialog(confirmed = false, restoreFocus = true) {
+            const request = todoCompletionRequest;
+            todoCompletionRequest = null;
+            document.getElementById('todo-completion-modal').classList.add('hidden');
+            if (!request) return;
+            for (const [element, inert] of request.backgrounds) element.inert = inert;
+            renderOnlineToolbar(onlineStore.status());
+            const focus = request.focus?.isConnected ? request.focus : request.todoId ?
+                document.querySelector('[data-todo-id="' + request.todoId + '"] input[type="checkbox"]') : null;
+            if (restoreFocus && focus?.getClientRects().length) focus.focus({ preventScroll: true });
+            request.resolve(confirmed);
+        }
+        async function confirmTodoCompletion(nextData, item, done) {
             const plan = TrackerOnline.todoCompletionPlan(nextData, item);
             if (!plan || !plan.descendants.length) return true;
+            if (todoCompletionRequest) throw new Error('Finish the current completion confirmation first.');
             const count = plan.descendants.length;
-            if (!done) return confirm('Reopen "' + plan.task.name + '" at ' + (plan.task.previousProgress ?? 0) +
-                '% using a manual override?\n\n' + count + ' descendants will remain unchanged. Other To Dos linked to this parent will reopen too.');
-            if (plan.completeBranch) return confirm('Complete "' + plan.task.name + '" and its entire descendant branch to 100%?\n\n' +
-                'All ' + count + ' descendants have linked To Dos somewhere in this profile.\n' +
-                plan.newlyCompleted + ' descendants will be newly completed; ' + plan.alreadyComplete + ' are already complete.\n' +
-                'Their linked To Dos, on every date, will also be completed. Unchecking the parent later reopens only the parent, not the children.');
-            return confirm('Override "' + plan.task.name + '" to 100% using manual progress?\n\n' +
-                plan.linkedCount + ' of ' + count + ' descendants have linked To Dos in this profile.\n' +
-                count + ' descendants will remain unchanged (' + plan.alreadyComplete + ' already complete).\n' +
-                'Their To Dos will not be completed. Clear the parent percentage in Gantt to return to automatic progress.');
+            let message, title, action;
+            if (!done) {
+                title = 'Reopen linked parent?'; action = 'Reopen parent';
+                message = 'Reopen "' + plan.task.name + '" at ' + (plan.task.previousProgress ?? 0) +
+                    '% using a manual override?\n\n' + count +
+                    ' descendants will remain unchanged. Other To Dos linked to this parent will reopen too.';
+            } else if (plan.completeBranch) {
+                title = 'Complete parent and subtasks?'; action = 'Complete branch';
+                message = 'Complete "' + plan.task.name + '" and its entire descendant branch to 100%?\n\n' +
+                    'All ' + count + ' descendants have linked To Dos somewhere in this profile.\n' +
+                    plan.newlyCompleted + ' descendants will be newly completed; ' + plan.alreadyComplete + ' are already complete.\n' +
+                    'Their linked To Dos, on every date, will also be completed. Unchecking the parent later reopens only the parent, not the children.';
+            } else {
+                title = 'Complete linked parent?'; action = 'Complete parent';
+                message = 'Override "' + plan.task.name + '" to 100% using manual progress?\n\n' +
+                    plan.linkedCount + ' of ' + count + ' descendants have linked To Dos in this profile.\n' +
+                    count + ' descendants will remain unchanged (' + plan.alreadyComplete + ' already complete).\n' +
+                    'Their To Dos will not be completed. Clear the parent percentage in Gantt to return to automatic progress.';
+            }
+            const modal = document.getElementById('todo-completion-modal'), stamp = todoCompletionStamp();
+            document.getElementById('todo-completion-title').textContent = title;
+            document.getElementById('todo-completion-message').textContent = message;
+            document.getElementById('todo-completion-confirm').textContent = action;
+            const confirmed = await new Promise(resolve => {
+                const backgrounds = Array.from(document.body.children).filter(element => element !== modal &&
+                    !element.contains(modal) && element.tagName !== 'SCRIPT').map(element => [element, element.inert]);
+                const focus = document.activeElement;
+                todoCompletionRequest = { resolve, backgrounds, focus, todoId: focus.closest('[data-todo-id]')?.dataset.todoId };
+                for (const [element] of backgrounds) element.inert = true;
+                modal.classList.remove('hidden');
+                document.getElementById('todo-completion-cancel').focus({ preventScroll: true });
+            });
+            if (confirmed && stamp !== todoCompletionStamp()) {
+                throw new Error('Task progress or links changed while this confirmation was open. Review the task and try again.');
+            }
+            return confirmed;
         }
-        function changeTodoCompletion(dateStr, id, done) {
+        function notifyLinkedProgress(automaticParents, reopenedTask = null) {
+            const messages = [];
+            if (reopenedTask) messages.push('Reopened "' + reopenedTask.name + '" at ' + reopenedTask.progress + '%.');
+            for (const done of [true, false]) {
+                const parents = automaticParents.filter(parent => parent.done === done);
+                if (!parents.length) continue;
+                messages.push('Parent' + (parents.length === 1 ? '' : 's') + (done ? ' completed' : ' reopened') +
+                    ' automatically from subtask progress:\n' + parents.map(parent =>
+                        '"' + parent.name + '" (' + parent.progress + '%)').join('\n'));
+                const linked = Object.values(data.todos || {}).flat().filter(item =>
+                    parents.some(parent => item.projectId === parent.projectId && item.taskId === parent.id)).length;
+                if (linked) messages.push(linked + ' linked To Do' + (linked === 1 ? ' was' : 's were') +
+                    (done ? ' also completed.' : ' also reopened.'));
+            }
+            if (messages.length) todoPopup('Progress updated', messages.join('\n\n'), 'border-blue-500', { pre: true, status: true });
+        }
+        async function changeTodoCompletion(dateStr, id, done, control) {
             try {
+                const current = (data.todos[dateStr] || []).find(todo => todo.id === id);
+                if (!current) throw new Error('This To Do no longer exists.');
+                if (current.done === done) return true;
+                if (!await confirmTodoCompletion(data, current, done)) return false;
                 const item = (data.todos[dateStr] || []).find(todo => todo.id === id);
                 if (!item) throw new Error('This To Do no longer exists.');
-                if (item.done === done) return true;
-                if (!confirmTodoCompletion(data, item, done)) return false;
                 const plan = TrackerOnline.setTodoCompletion(data, item, done);
                 const saved = saveTodos();
                 if (saved && activeProjectId !== 'todo') render();
-                if (saved && !done && plan && !plan.descendants.length) todoNotice('Reopened "' + plan.task.name + '" at ' + plan.task.progress + '%.');
+                if (saved && plan) notifyLinkedProgress(plan.automaticParents,
+                    !done && !plan.descendants.length ? plan.task : null);
+                if (saved && control) document.querySelector('[data-todo-id="' + id + '"] input[type="checkbox"]')?.focus({ preventScroll: true });
                 return saved;
             } catch (error) { showOnlineError(error); return false; }
         }
@@ -4290,9 +4377,10 @@ async function startOnlineTracker() {
             const fresh = document.getElementById('todo-input');
             if (fresh) fresh.focus();
         }
-        function toggleTodo(dateStr, id) {
+        function toggleTodo(dateStr, id, control) {
             const it = (data.todos[dateStr] || []).find(x => x.id === id);
-            return changeTodoCompletion(dateStr, id, !it?.done);
+            if (control) control.checked = !!it?.done;
+            return changeTodoCompletion(dateStr, id, !it?.done, control);
         }
         function deleteTodo(dateStr, id) {
             const list = data.todos[dateStr] || [];
@@ -4334,39 +4422,51 @@ async function startOnlineTracker() {
             const target = id && document.querySelector('[data-todo-id="' + id + '"] .todo-item-text');
             if (target?.getClientRects().length) { target.tabIndex = 0; target.focus({ preventScroll: true }); }
         }
-        function saveTodoEdit() {
+        function stageTodoEdit() {
+            if (!todoEditRef) throw new Error('Open a To Do before saving.');
+            const next = JSON.parse(JSON.stringify(data));
+            const item = (next.todos[todoEditRef.date] || []).find(todo => todo.id === todoEditRef.id);
+            if (!item) throw new Error('This To Do no longer exists.');
+            const text = document.getElementById('todo-edit-text').value.trim();
+            if (!text) throw new Error('Enter text for the To Do.');
+            const projectId = document.getElementById('todo-edit-proj').value || null;
+            const taskId = document.getElementById('todo-edit-task').value;
+            const changed = projectId !== item.projectId || taskId !== (item.taskId || '');
+            const newTime = document.getElementById('todo-edit-time').value || null;
+            if (newTime !== item.time) { item.notified = false; item.snoozeUntil = null; }
+            item.text = text; item.time = newTime; item.projectId = projectId;
+            if (taskId) item.taskId = taskId;
+            else delete item.taskId;
+            const notes = TrackerOnline.sanitizeRichText(document.getElementById('todo-edit-notes').innerHTML);
+            if (notes || item.description !== undefined) item.description = notes;
+            let completion = null;
+            if (changed && taskId) {
+                const task = TrackerOnline.taskBranch(next, projectId, taskId).task;
+                if ((task.progress === 100) !== item.done) {
+                    const choice = document.getElementById('todo-edit-completion').value;
+                    if (!['gantt', 'todo'].includes(choice)) throw new Error('Choose which completion status to keep before linking.');
+                    if (choice === 'todo') completion = item.done;
+                    else item.done = task.progress === 100;
+                }
+            }
+            return { next, item, completion };
+        }
+        async function saveTodoEdit() {
             const errorBox = document.getElementById('todo-edit-error');
             errorBox.classList.add('hidden');
             try {
-                if (!todoEditRef) throw new Error('Open a To Do before saving.');
-                const next = JSON.parse(JSON.stringify(data));
-                const item = (next.todos[todoEditRef.date] || []).find(todo => todo.id === todoEditRef.id);
-                if (!item) throw new Error('This To Do no longer exists.');
-                const text = document.getElementById('todo-edit-text').value.trim();
-                if (!text) throw new Error('Enter text for the To Do.');
-                const projectId = document.getElementById('todo-edit-proj').value || null;
-                const taskId = document.getElementById('todo-edit-task').value;
-                const changed = projectId !== item.projectId || taskId !== (item.taskId || '');
-                const newTime = document.getElementById('todo-edit-time').value || null;
-                if (newTime !== item.time) { item.notified = false; item.snoozeUntil = null; }
-                item.text = text; item.time = newTime; item.projectId = projectId;
-                if (taskId) item.taskId = taskId;
-                else delete item.taskId;
-                const notes = TrackerOnline.sanitizeRichText(document.getElementById('todo-edit-notes').innerHTML);
-                if (notes || item.description !== undefined) item.description = notes;
-                if (changed && taskId) {
-                    const task = TrackerOnline.taskBranch(next, projectId, taskId).task;
-                    if ((task.progress === 100) !== item.done) {
-                        const choice = document.getElementById('todo-edit-completion').value;
-                        if (!['gantt', 'todo'].includes(choice)) throw new Error('Choose which completion status to keep before linking.');
-                        if (choice === 'todo') {
-                            if (!confirmTodoCompletion(next, item, item.done)) return;
-                            TrackerOnline.setTodoCompletion(next, item, item.done);
-                        } else item.done = task.progress === 100;
-                    }
+                let staged = stageTodoEdit(), plan = null;
+                if (staged.completion !== null) {
+                    if (!await confirmTodoCompletion(staged.next, staged.item, staged.completion)) return;
+                    staged = stageTodoEdit();
+                    plan = TrackerOnline.setTodoCompletion(staged.next, staged.item, staged.completion);
                 }
-                data = TrackerOnline.normalizeData(next);
-                if (saveTodos()) closeTodoEditModal();
+                data = TrackerOnline.normalizeData(staged.next);
+                if (saveTodos()) {
+                    closeTodoEditModal();
+                    if (plan) notifyLinkedProgress(plan.automaticParents,
+                        !staged.completion && !plan.descendants.length ? plan.task : null);
+                }
             } catch (error) {
                 console.error('To Do edit:', error.message);
                 errorBox.textContent = error.message; errorBox.classList.remove('hidden');
@@ -4509,6 +4609,7 @@ async function startOnlineTracker() {
             opts = opts || {};
             const el = document.createElement('div');
             el.setAttribute('data-popup', '');
+            if (opts.status) el.setAttribute('role', 'status');
             if (opts.reminder) el.setAttribute('data-reminder', '');
             el.className = `bg-gray-800 border ${color} text-white text-sm px-4 py-3 rounded shadow-xl mb-2 w-72`;
             el.innerHTML = `<div class="flex items-start gap-2">
@@ -4584,6 +4685,12 @@ async function startOnlineTracker() {
             todoLastDay = t;
             updateTodoBadge();
         }
+        function todoProjectHint(item) {
+            const project = data.projects.find(candidate => candidate.id === item.projectId);
+            const task = item.taskId ? (data.tasks[item.projectId] || []).find(candidate => candidate.id === item.taskId) : null;
+            return (project ? project.name : 'Project tag') + (task ?
+                '\nCompletion linked to: ' + task.name + ' (' + task.progress + '%).\nManage the link in Edit Item.' : '');
+        }
         function renderTodoView() {
             const container = document.getElementById('todo-content');
             if (!container) return;
@@ -4602,7 +4709,7 @@ async function startOnlineTracker() {
                 const style = p
                     ? `background:${c}22; color:${c}; border:1px solid ${c}66;`
                     : `background:transparent; color:#6b7280; border:1px solid #374151;`;
-                const sel = `<select onchange="setTodoProject('${dateStr}','${it.id}',this.value,this)" title="Project tag" style="${style}"
+                const sel = `<select onchange="setTodoProject('${dateStr}','${it.id}',this.value,this)" title="${todoEsc(todoProjectHint(it))}" style="${style}"
                         class="shrink-0 appearance-none rounded px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide outline-none cursor-pointer max-w-[150px] truncate">${opts}</select>`;
                 const open = p
                     ? `<button onclick="openProject('${p.id}')" class="shrink-0 text-gray-500 hover:text-blue-400 icon-btn" title="Open project">${svgTodoOpen}</button>`
@@ -4621,10 +4728,8 @@ async function startOnlineTracker() {
                 const p = it.projectId ? data.projects.find(x => x.id === it.projectId) : null;
                 if (p) {
                     const c = todoProjColor(p.id);
-                    h += `<span data-tag-badge class="shrink-0 px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wide max-w-[150px] truncate ${done ? 'opacity-50' : ''}" style="background:${c}22; color:${c}; border:1px solid ${c}66;">${todoEsc(p.name)}</span>`;
+                    h += `<span data-tag-badge title="${todoEsc(todoProjectHint(it))}" class="shrink-0 px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wide max-w-[150px] truncate ${done ? 'opacity-50' : ''}" style="background:${c}22; color:${c}; border:1px solid ${c}66;">${todoEsc(p.name)}</span>`;
                 }
-                const task = it.taskId ? (data.tasks[it.projectId] || []).find(value => value.id === it.taskId) : null;
-                if (task) h += `<span data-task-badge class="todo-task-badge" title="${todoEsc('Completion linked to: ' + task.name)}">Linked: ${todoEsc(task.name)}</span>`;
                 return h;
             };
             const itemRow = (dateStr, it, isOverdue) => {
@@ -4651,7 +4756,7 @@ async function startOnlineTracker() {
                        <span data-controls class="shrink-0 hidden group-hover:flex items-center gap-3">${controls}</span>`;                return `
                 <div data-todo-id="${it.id}" ${isOverdue ? '' : `draggable="${!mobileLayout}" data-todo-row`} class="todo-item group flex items-start gap-3 px-3 py-3 rounded-lg border ${done ? 'border-gray-800 bg-gray-800/40' : 'border-gray-700 bg-gray-800'} hover:border-gray-600 transition-colors">
                     ${isOverdue ? '' : `<span class="drag-grip select-none text-gray-600 hover:text-gray-400 shrink-0 text-xs leading-none mt-[7px]" title="Drag to reorder">&#8942;&#8942;</span>`}
-                    <label class="todo-checkbox-wrap" aria-label="${done ? 'Reopen item' : 'Mark item complete'}"><input type="checkbox" ${done ? 'checked' : ''} onchange="if(!toggleTodo('${dateStr}','${it.id}'))this.checked=${done};" class="w-5 h-5 shrink-0 mt-0.5 accent-blue-500 cursor-pointer"></label>
+                    <label class="todo-checkbox-wrap" aria-label="${done ? 'Reopen item' : 'Mark item complete'}"><input type="checkbox" ${done ? 'checked' : ''} onchange="toggleTodo('${dateStr}','${it.id}',this)" class="w-5 h-5 shrink-0 mt-0.5 accent-blue-500 cursor-pointer"></label>
                     <span class="todo-item-text flex-1 min-w-0 break-words text-base leading-relaxed ${done ? 'line-through text-gray-500' : 'text-gray-100'} cursor-text" ${mobileLayout ? 'role="button" tabindex="0"' : ''} onclick="editTodo('${dateStr}','${it.id}')" title="Click to edit">${todoEsc(it.text)}${it.description ? ' ' + svgNoteIcon : ''}</span>
                     ${right}
                     ${isOverdue ? `<span data-mobile-badges class="mobile-only">${restBadges(dateStr, it, done)}</span>` : ''}
@@ -5430,7 +5535,11 @@ async function startOnlineTracker() {
             const actions = document.getElementById('mobile-actions-modal');
             const copy = document.getElementById('gantt-todo-modal');
             const todoEdit = document.getElementById('todo-edit-modal');
-            if (!copy.classList.contains('hidden')) {
+            const completion = document.getElementById('todo-completion-modal');
+            if (!completion.classList.contains('hidden')) {
+                trapMobileFocus(event, completion);
+                if (event.key === 'Escape') { event.preventDefault(); closeTodoCompletionDialog(); }
+            } else if (!copy.classList.contains('hidden')) {
                 trapMobileFocus(event, copy);
                 if (event.key === 'Escape') { event.preventDefault(); closeGanttTodoDialog(); }
             } else if (!todoEdit.classList.contains('hidden')) {
